@@ -20,6 +20,8 @@ launcher/temp/
 launcher/tool/uv/
 launcher/tool/.uv_cache/
 launcher/data/installed_apps.json
+launcher/data/manifest.dev.json
+launcher/data/settings.json
 
 # Translator apps are separate repositories
 lgt_app/

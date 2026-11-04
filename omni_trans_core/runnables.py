@@ -12,7 +12,7 @@ from .proxy_manager import proxy_manager
 import httpx
 from PySide6 import QtCore
 from openai import OpenAI
-from . import utils, settings
+from . import settings
 from .interfaces import AbstractPromptFormatter, AbstractResponseParser, JobSignals
 from .localization_manager import translate
 
@@ -20,16 +20,6 @@ try:
     from ruamel.yaml import YAML
 except ImportError:
     YAML = None
-
-try:
-    from google import genai
-    from google.genai import types, errors
-    from google.api_core.exceptions import ResourceExhausted
-except ImportError:
-    genai = None
-    ResourceExhausted = None
-    errors = None
-    types = None
 
 logger = logging.getLogger('CORE.runnables')
 
@@ -52,216 +42,6 @@ class BaseJobRunnable(QtCore.QRunnable):
 
     def run(self):
         raise NotImplementedError
-
-class GeminiJobRunnable(BaseJobRunnable):
-    @QtCore.Slot()
-    def run(self):
-        if not all([genai, types, errors, ResourceExhausted]):
-            err_msg = translate("runnable.gemini.error.library_missing")
-            logger.error(err_msg)
-            self.signals.job_failed.emit(
-                self.job_data, err_msg, "N/A", err_msg, ImportError(err_msg), {}
-            )
-            return
-        job_data = self.job_data
-        original_item = job_data["original_item"]
-        item_id = original_item["id"]
-        text_to_translate_for_log = original_item.get("source_text", "Unknown Text")
-        model_name_requested_for_this_job = job_data.get("model_name")
-        api_key_for_this_job = job_data.get("api_key")
-        generation_params = job_data.get("generation_params", {})
-        start_time = time.monotonic()
-        try:
-            masked_key_log_text = utils.mask_api_key(api_key_for_this_job)
-            logger.info(
-                f"[Gemini] Job starting for item '{item_id}' with API key: {masked_key_log_text}, Model: {model_name_requested_for_this_job}"
-            )
-
-            proxy_url = proxy_manager.get_proxy()
-            http_client = None
-            if proxy_url:
-                try:
-                    http_client = httpx.Client(proxy=proxy_url)
-                    logger.info(f"[Gemini] Using proxy for item '{item_id}'")
-                except Exception as e:
-                    logger.warning(f"[Gemini] Failed to create proxied httpx client: {e}")
-            client = genai.Client(api_key=api_key_for_this_job, http_client=http_client)
-            messages = self.prompt_formatter.format_prompt(
-                item=original_item,
-                src_lang=job_data["source_lang"],
-                tgt_lang=job_data["target_lang"],
-                custom_settings=generation_params,
-                is_regeneration=job_data.get("is_regeneration", False),
-            )
-            final_prompt_string = "\n\n".join(
-                [msg["content"] for msg in messages if msg.get("role") != "model"]
-            )
-            if not client:
-                raise ValueError("Client object not provided.")
-            enable_thinking = generation_params.get("enable_model_thinking", True)
-            thinking_budget = generation_params.get("thinking_budget_value", -1)
-            thinking_level = generation_params.get("thinking_level", "high")
-            
-            thinking_config = None
-            is_gemini_3 = "gemini-3" in model_name_requested_for_this_job.lower()
-            if enable_thinking:
-                if is_gemini_3:
-                    thinking_config = types.ThinkingConfig(
-                        include_thoughts=True, thinking_level=thinking_level
-                    )
-                else:
-                    if thinking_budget > 0:
-                        thinking_config = types.ThinkingConfig(
-                            include_thoughts=True, thinking_budget=thinking_budget
-                        )
-                    else:
-                        thinking_config = types.ThinkingConfig(include_thoughts=True)
-            elif (
-                "flash" in model_name_requested_for_this_job.lower() and not is_gemini_3
-            ):
-                thinking_config = types.ThinkingConfig(thinking_budget=0)
-
-            config_params = {
-                "temperature": generation_params.get("temperature", 1.0),
-                "top_p": generation_params.get("top_p", 0.95),
-                "thinking_config": thinking_config,
-                "safety_settings": [
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                ],
-            }
-            max_tokens = generation_params.get("max_output_tokens", 0)
-            if max_tokens > 0:
-                config_params["max_output_tokens"] = max_tokens
-            final_config_obj = types.GenerateContentConfig(**config_params)
-            response = client.models.generate_content(
-                model=f"models/{model_name_requested_for_this_job}",
-                contents=final_prompt_string,
-                config=final_config_obj,
-            )
-            logger.debug(f"Full Gemini Response: {response!r}")
-            duration = time.monotonic() - start_time
-            final_processed_translation, thinking_text_output, usage_metadata_output = (
-                self.response_parser.parse(response, job_data)
-            )
-            proxy_ip = ""
-            proxy_used = False
-            if proxy_url:
-                proxy_used = True
-                try:
-                    if "://" in proxy_url:
-                        host_part = proxy_url.split("://", 1)[1]
-                        if "@" in host_part:
-                            host_part = host_part.split("@", 1)[1]
-                        proxy_ip = host_part.rsplit(":", 1)[0]
-                except Exception:
-                    proxy_ip = proxy_url
-            self.signals.inspector_update.emit(
-                model_name_requested_for_this_job,
-                final_prompt_string,
-                final_processed_translation or "",
-                thinking_text_output,
-                usage_metadata_output,
-                proxy_ip,
-                proxy_used,
-            )
-            if proxy_url:
-                proxy_manager.mark_success(proxy_url)
-            self.signals.job_completed.emit(
-                job_data,
-                final_processed_translation,
-                thinking_text_output,
-                usage_metadata_output,
-                duration,
-            )
-        except (ResourceExhausted, errors.ClientError) as e_quota:
-            if proxy_url:
-                proxy_manager.mark_failed(proxy_url)
-            error_message_str = str(e_quota)
-            if (
-                "429" not in error_message_str
-                and "RESOURCE_EXHAUSTED" not in error_message_str.upper()
-            ):
-                logger.warning(
-                    f"Caught {type(e_quota).__name__} but it is not a 429/ResourceExhausted error. Re-raising to generic handler."
-                )
-                raise e_quota
-            masked_key_log_text_err = utils.mask_api_key(api_key_for_this_job)
-            logger.error(
-                f"Quota Error for '{text_to_translate_for_log}' (Key: {masked_key_log_text_err}): {e_quota}",
-                exc_info=False,
-            )
-            extra_details = {"model_name_from_job": model_name_requested_for_this_job}
-            retry_delay_match = re.search(
-                r"['\"]retryDelay['\"]\s*:\s*['\"](\d+)s['\"]|retry_delay\s*{\s*seconds:\s*(\d+)\s*}",
-                error_message_str,
-                re.IGNORECASE,
-            )
-            if retry_delay_match:
-                try:
-                    delay_str = retry_delay_match.group(1) or retry_delay_match.group(2)
-                    if delay_str:
-                        extra_details["retry_delay_seconds"] = int(delay_str)
-                except (ValueError, TypeError):
-                    pass
-            self.signals.job_failed.emit(
-                job_data,
-                str(e_quota),
-                translate("runnable.gemini.error.quota_title"),
-                translate("runnable.gemini.error.quota_text", error=str(e_quota)),
-                e_quota,
-                extra_details,
-            )
-        except errors.ServerError as e_server:
-            if proxy_url:
-                proxy_manager.mark_failed(proxy_url)
-            masked_key_log_text_err = utils.mask_api_key(api_key_for_this_job)
-            logger.error(
-                f"[Gemini] Server Error for '{text_to_translate_for_log}' (Key: {masked_key_log_text_err}): {e_server}",
-                exc_info=False,
-            )
-            self.signals.job_failed.emit(
-                job_data,
-                str(e_server),
-                "Gemini API Server Error",
-                str(e_server),
-                e_server,
-                {},
-            )
-        except Exception as e:
-            if proxy_url:
-                proxy_manager.mark_failed(proxy_url)
-            masked_key_log_text_err_gen = utils.mask_api_key(api_key_for_this_job)
-            logger.error(
-                f"[Gemini] Exception for '{text_to_translate_for_log}' (Key: {masked_key_log_text_err_gen}): {e}",
-                exc_info=True,
-            )
-            self.signals.job_failed.emit(
-                job_data,
-                str(e),
-                translate("runnable.gemini.error.generic_title"),
-                translate("runnable.gemini.error.generic_text", error=str(e)),
-                e,
-                {},
-            )
 
 class CustomJobRunnable(BaseJobRunnable):
     async def _run_async_with_proxy(self, final_call_args, custom_provider_params, proxy_url):
@@ -290,7 +70,7 @@ class CustomJobRunnable(BaseJobRunnable):
         job_data = self.job_data
         original_item = job_data["original_item"]
         item_id = original_item["id"]
-        generation_params = job_data.get("generation_params", {})
+        generation_params = job_data.get("generation_params") or {}
         provider = job_data.get("provider")
         model_name = job_data.get("model_name")
         api_key = job_data.get("api_key")
@@ -307,7 +87,10 @@ class CustomJobRunnable(BaseJobRunnable):
             return
 
         provider_for_litellm = "openai" if provider == "openai_compatible" else provider
-        model_for_litellm = f"{provider_for_litellm}/{model_name}"
+        if model_name.startswith(f"{provider_for_litellm}/"):
+            model_for_litellm = model_name
+        else:
+            model_for_litellm = f"{provider_for_litellm}/{model_name}"
         start_time = time.monotonic()
         logger.info(
             f"[LiteLLM] Job starting for item '{item_id}' for '{model_for_litellm}'. Using endpoint: {base_url or 'Default'}"
@@ -345,6 +128,9 @@ class CustomJobRunnable(BaseJobRunnable):
                     "presence_penalty", defaults["presence_penalty"]
                 ),
             }
+
+            if not standard_litellm_args.get("api_base"):
+                standard_litellm_args.pop("api_base", None)
 
             custom_provider_params = {}
 
@@ -427,7 +213,30 @@ class CustomJobRunnable(BaseJobRunnable):
             should_enable_thinking = thinking_config.get("enabled", True)
             current_mode = thinking_config.get("mode", "unsupported")
 
-            if current_mode == "command":
+            if provider == "gemini":
+                if "gemini-3" in model_name.lower():
+                    if should_enable_thinking:
+                        level = generation_params.get("thinking_level", "high")
+                        standard_litellm_args["reasoning_effort"] = (
+                            level if level in ("low", "medium", "high") else "high"
+                        )
+                    else:
+                        standard_litellm_args["reasoning_effort"] = "none"
+                elif should_enable_thinking:
+                    budget = generation_params.get("thinking_budget_value", -1)
+                    if isinstance(budget, int):
+                        standard_litellm_args["thinking"] = {
+                            "type": "enabled",
+                            "budget_tokens": budget,
+                        }
+                    else:
+                        standard_litellm_args["reasoning_effort"] = "high"
+                else:
+                    standard_litellm_args["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": 0,
+                    }
+            elif current_mode == "command":
                 cmd = (
                     thinking_config.get("enable_cmd")
                     if should_enable_thinking
@@ -693,7 +502,15 @@ class FetchModelsWorker(QtCore.QObject):
                 http_client = httpx.Client(proxy=proxy_url)
                 logger.info(f"[FetchModels] Using proxy for {self.provider_id}")
             logger.debug(f"[FetchModels] Provider: {self.provider_id}, Base URL: {self.base_url}")
-            
+
+            if self.provider_id == "gemini":
+                from .gemini_models import fetch_gemini_models
+
+                self.finished.emit(
+                    fetch_gemini_models(self.api_key, proxy_url=proxy_url)
+                )
+                return
+
             try:
                 client = OpenAI(api_key=self.api_key, base_url=self.base_url, http_client=http_client)
                 models_response = client.models.list()

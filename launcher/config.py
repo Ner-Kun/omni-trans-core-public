@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ UV_EXEC = UV_DIR / "uv.exe"
 UV_CACHE_DIR = TEMP_DIR / "uv_cache"
 
 INSTALLED_APPS_JSON = DATA_DIR / "installed_apps.json"
-STYLES_QSS = RESOURCES_DIR / "styles.qss"
+LAUNCHER_SETTINGS_JSON = DATA_DIR / "settings.json"
 UPDATER_TEMPLATE = RESOURCES_DIR / "updater.bat"
 
 if sys.platform == "win32":
@@ -26,10 +27,36 @@ if sys.platform == "win32":
 else:
     VENV_PYTHON = VENV_DIR / "bin" / "python"
 
-MANIFEST_URL = ("https://raw.githubusercontent.com/Ner-Kun/omni-trans-launcher/main/manifest.json")
-URL_LAUNCHER_REQ = "https://raw.githubusercontent.com/Ner-Kun/omni-trans-launcher/refs/heads/main/requirements.txt"
-URL_CORE_REQ = "https://raw.githubusercontent.com/Ner-Kun/omni-trans-core/refs/heads/main/requirements.txt"
-UV_DOWNLOAD_URL = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+APP_NAME = "Omni Trans Launcher"
+LAUNCHER_VERSION = "1.1.0"
+
+# Dev mode keeps the launcher on local requirements and a local manifest
+# instead of pulling release data from GitHub.
+DEV_MODE = os.environ.get("OMNI_LAUNCHER_DEV", "").strip() == "1"
+LOCAL_MANIFEST = DATA_DIR / "manifest.dev.json"
+LOCAL_LAUNCHER_REQUIREMENTS = LAUNCHER_DIR / "requirements.txt"
+LOCAL_CORE_REQUIREMENTS = ROOT_DIR / "requirements.txt"
+
+_DEFAULT_MANIFEST_URL = (
+    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-launcher/main/manifest.json"
+)
+MANIFEST_URL = os.environ.get("OMNI_LAUNCHER_MANIFEST_URL", "").strip() or (
+    str(LOCAL_MANIFEST)
+    if DEV_MODE and LOCAL_MANIFEST.exists()
+    else _DEFAULT_MANIFEST_URL
+)
+URL_LAUNCHER_REQ = (
+    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-launcher/refs/heads/main/requirements.txt"
+)
+URL_CORE_REQ = (
+    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-core/refs/heads/main/requirements.txt"
+)
+UV_DOWNLOAD_URL = (
+    "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
+)
+
+WINDOW_WIDTH = 1100
+WINDOW_HEIGHT = 720
 
 SOCIAL_CONFIG = {
     "telegram": {
@@ -63,8 +90,6 @@ NAG_CONFIG = {
     },
 }
 
-
-LAUNCHER_VERSION = "1.0.0"
 ANIMATION_PAUSE_MS = 1000
 
 for path in [TEMP_DIR, DATA_DIR, RESOURCES_DIR, TOOL_DIR]:

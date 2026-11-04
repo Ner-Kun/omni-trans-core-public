@@ -232,6 +232,7 @@
 		"dialog.donation.title": "Support Development",
 		"dialog.donation.text": "Looks like you're actively using the program! That's great.<br><br>If it helps you, please consider supporting its continued development. This motivates me to add new features.",
 		"dialog.donation.button_support": "Support the Project",
+		"dialog.donation.button_support_core": "Support the Core",
 		"dialog.donation.button_later": "Remind Me Later",
 
 		"dialog.manage_languages.title": "Manage {language_type} Languages",

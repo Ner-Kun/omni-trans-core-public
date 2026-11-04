@@ -1,5 +1,7 @@
-import requests
+import json
 import re
+
+import requests
 from pathlib import Path
 from packaging.version import parse as parse_version
 from rich.console import Console
@@ -38,18 +40,31 @@ class UpdateManager:
         }
 
     def fetch_manifest(self):
-        console.log(f"Network: Fetching manifest from: {self.manifest_url}")
+        console.log(f"Manifest: {self.manifest_url}")
         try:
-            response = requests.get(self.manifest_url, headers=self.headers, timeout=5)
-            response.raise_for_status()
-            self.manifest_data = response.json()
+            if self.manifest_url.startswith(("http://", "https://")):
+                response = requests.get(
+                    self.manifest_url,
+                    headers=self.headers,
+                    timeout=(5, 10),
+                )
+                response.raise_for_status()
+                self.manifest_data = response.json()
+            else:
+                path = Path(self.manifest_url)
+                if not path.exists():
+                    console.log(f"Error: Local manifest not found: {path}")
+                    self.manifest_data = {}
+                    return False
+                self.manifest_data = json.loads(path.read_text(encoding="utf-8"))
+
             if not isinstance(self.manifest_data, dict):
                 console.log("Error: Manifest is not a JSON object.")
                 self.manifest_data = {}
                 return False
             return True
         except Exception as e:
-            console.log(f"[Error: Manifest fetch failed: {e}")
+            console.log(f"[red]Error[/] Manifest fetch failed: {e}")
             return False
 
     def _construct_download_url(self, repo_url, version, filename=None, branch="main"):
@@ -80,7 +95,7 @@ class UpdateManager:
                 repo = repo[:-4]
 
             api_url = f"https://api.github.com/repos/{owner}/{repo}/releases"
-            resp = requests.get(api_url, headers=self.headers, timeout=5)
+            resp = requests.get(api_url, headers=self.headers, timeout=(5, 10))
 
             if resp.status_code != 200:
                 console.log(f"Error: API returned {resp.status_code}")
@@ -107,7 +122,7 @@ class UpdateManager:
             console.log(
                 f"GitHub:Exact match not found. Using newest available: {tag}"
             )
-            console.log("[Notes fetched (fallback).")
+            console.log("Notes fetched (fallback).")
 
             return (
                 f"**Note:** Showing notes for latest release ({tag}).\n\n"

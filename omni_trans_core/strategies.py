@@ -3,23 +3,14 @@ import time
 import collections
 import random
 import litellm
-from typing import Any, Optional
+from typing import Optional
 from PySide6 import QtCore
-from . import settings, utils
-from .constants import RPM_COOLDOWN_SECONDS
+from . import settings
 from .interfaces import AbstractConnectionStrategy, DispatchReadiness
-from .runnables import GeminiJobRunnable, CustomJobRunnable
+from .key_pool import KeyPool
+from .runnables import CustomJobRunnable
 from .interfaces import JobSignals
 from .localization_manager import translate
-
-try:
-    from google import genai
-    from google.genai import errors
-    from google.api_core.exceptions import ResourceExhausted
-except ImportError:
-    genai: Optional[Any] = None
-    errors: Optional[Any] = None
-    ResourceExhausted: Optional[Any] = None
 
 logger = logging.getLogger('CORE.strategies')
 
@@ -48,224 +39,16 @@ def _cull_and_sum_tokens(token_deque: collections.deque, window_seconds: int) ->
         token_deque.popleft()
     return sum(item[1] for item in token_deque)
 
-class GeminiStrategy(AbstractConnectionStrategy):
-    def __init__(self, manager, connection_name, global_settings):
-        self.manager = manager
-        self.name = connection_name
-        self.settings = global_settings
-        self.api_request_timestamps_per_key = {}
-        self.api_key_cooldown_end_times = {}
-        self.discovered_rpm_limits = {}
-
-    def get_dispatch_readiness(self) -> DispatchReadiness:
-        api_keys = self.settings.get("api_keys", [])
-        if not api_keys:
-            return DispatchReadiness(False, fatal_reason="failed (no Gemini API keys)")
-        if self._find_available_key():
-            return DispatchReadiness(True)
-        return DispatchReadiness(False, self._next_key_retry_delay_ms())
-
-    def dispatch_job(self, job_data: dict) -> bool:
-        selected = self._find_available_key()
-        if not selected:
-            return False
-
-        key_to_use, key_index = selected
-        api_keys = self.settings.get("api_keys", [])
-        self.settings["current_api_key_index"] = (key_index + 1) % len(api_keys)
-
-        try:
-            job_data["api_key"] = key_to_use
-            self._record_api_request_timestamp(key_to_use)
-            runnable = self.create_runnable(job_data)
-            self.manager.thread_pool.start(runnable)
-            self.manager._mark_job_started(job_data)
-
-            logger.debug(
-                f"[Gemini] Dispatched job for '{job_data['original_item']['source_text']}'."
-            )
-        except Exception as e:
-            self.manager._handle_job_dispatch_failed(job_data, str(e), e)
-            return True
-
-        if self.manager.pending_translation_jobs:
-            self.manager.translation_timer.start(100)
-        return True
-
-    def _find_available_key(self) -> tuple[str, int] | None:
-        api_keys = self.settings.get("api_keys", [])
-        if not api_keys:
-            return None
-
-        now = time.monotonic()
-        num_k = len(api_keys)
-        start_idx_rot = self.settings.get("current_api_key_index", 0)
-        for i in range(num_k):
-            key_idx_chk = (start_idx_rot + i) % num_k
-            cand_key = api_keys[key_idx_chk]
-            cooldown_end = self.api_key_cooldown_end_times.get(cand_key)
-            if cooldown_end and cooldown_end > now:
-                continue
-            if self._is_rpm_limit_reached_for_key(cand_key):
-                continue
-            return cand_key, key_idx_chk
-        return None
-
-    def _next_key_retry_delay_ms(self) -> int:
-        api_keys = self.settings.get("api_keys", [])
-        if not api_keys:
-            return 1000
-
-        now = time.monotonic()
-        wait_times_ms = []
-        model = self.settings.get("gemini_model")
-        rpm_limit = self._get_effective_rpm_limit_for_model(model)
-
-        for api_key in api_keys:
-            cooldown_end = self.api_key_cooldown_end_times.get(api_key)
-            if cooldown_end and cooldown_end > now:
-                wait_times_ms.append(int((cooldown_end - now) * 1000) + 50)
-                continue
-
-            timestamps = self.api_request_timestamps_per_key.get(api_key)
-            if timestamps and rpm_limit > 0:
-                _cull_and_count_requests(timestamps, 60)
-                if len(timestamps) >= rpm_limit:
-                    wait_times_ms.append(
-                        max(50, int((timestamps[0] + 60 - now) * 1000) + 50)
-                    )
-
-        if wait_times_ms:
-            next_attempt_delay_ms = min(wait_times_ms)
-        else:
-            next_attempt_delay_ms = 1000
-
-        logger.warning(
-            f"All Gemini keys busy/cooldown. Smart waiting: {next_attempt_delay_ms}ms."
-        )
-        return next_attempt_delay_ms
-
-    def create_runnable(self, job_data: dict) -> "QtCore.QRunnable":
-        signals = JobSignals()
-        signals.job_completed.connect(self.manager._handle_job_completed)
-        signals.job_failed.connect(self.manager._handle_job_failed)
-        signals.inspector_update.connect(self.manager.inspector_update)
-        signals.thinking_unexpected.connect(self.manager.thinking_unexpected)
-        return GeminiJobRunnable(
-            job_data,
-            signals,
-            self.manager.prompt_formatter,
-            self.manager.response_parser,
-        )
-
-    def get_status_lines(self) -> dict:
-        model_name = self.settings.get("gemini_model", "N/A")
-        api_keys = self.settings.get("api_keys", [])
-        if not api_keys:
-            return {
-                "message": translate("strategy.gemini.status.no_api_keys"),
-                "color": "#FFA500",
-            }
-        now = time.monotonic()
-        rpm_limit = self._get_effective_rpm_limit_for_model(model_name)
-        num_keys = len(api_keys)
-        if num_keys == 1:
-            key = api_keys[0]
-            current_rpm = self._get_current_rpm_for_key(key)
-            return {
-                "model_name": model_name,
-                "limits": [{"name": "RPM", "current": current_rpm, "total": rpm_limit}],
-            }
-        cooldown_keys = []
-        available_key_to_dispatch = None
-        start_idx = self.settings.get("current_api_key_index", 0)
-        for i in range(num_keys):
-            key_idx = (start_idx + i) % num_keys
-            key = api_keys[key_idx]
-            cooldown_end_time = self.api_key_cooldown_end_times.get(key)
-            if cooldown_end_time and cooldown_end_time > now:
-                cooldown_keys.append({"key": key, "wait": cooldown_end_time - now})
-                continue
-            current_rpm = self._get_current_rpm_for_key(key)
-            if current_rpm >= rpm_limit:
-                cooldown_keys.append({"key": key, "wait": 60})
-                continue
-            if not available_key_to_dispatch:
-                available_key_to_dispatch = {"idx": key_idx, "rpm": current_rpm}
-        if not available_key_to_dispatch:
-            min_wait_time = (
-                min(c["wait"] for c in cooldown_keys) if cooldown_keys else 60
-            )
-            text = translate(
-                "strategy.gemini.status.all_keys_cooldown",
-                count=num_keys,
-                wait_time=f"{min_wait_time:.0f}",
-            )
-            return {"message": text, "color": "#FF5555"}
-        key_at_start_idx = api_keys[start_idx]
-        cooldown_end_at_start = self.api_key_cooldown_end_times.get(key_at_start_idx)
-        if cooldown_end_at_start and cooldown_end_at_start > now:
-            wait_time = cooldown_end_at_start - now
-            text = translate(
-                "strategy.gemini.status.next_key_cooldown",
-                key_text=f"#{start_idx + 1}",
-                wait_time=f"{wait_time:.0f}",
-            )
-            return {"message": text, "color": "#FFA500"}
-        idx = available_key_to_dispatch["idx"]
-        rpm = available_key_to_dispatch["rpm"]
-        return {
-            "model_name": f"{model_name} (Key #{idx + 1})",
-            "limits": [{"name": "RPM", "current": rpm, "total": rpm_limit}],
-        }
-
-    def on_job_failed(self, job_data: dict, error: Exception, extra_details: dict):
-        if ResourceExhausted is None or errors is None:
-            return
-        is_quota_error = isinstance(
-            error, (ResourceExhausted, errors.ClientError)
-        ) and ("429" in str(error) or "RESOURCE_EXHAUSTED" in str(error).upper())
-        if not is_quota_error:
-            return
-        used_key = job_data.get("api_key", "UNKNOWN_KEY")
-        retry_delay = extra_details.get("retry_delay_seconds")
-        cooldown = (retry_delay + 3) if retry_delay else RPM_COOLDOWN_SECONDS
-        self.api_key_cooldown_end_times[used_key] = time.monotonic() + cooldown
-        logger.info(
-            f"Cooling down Gemini key {utils.mask_api_key(used_key)} for {cooldown}s."
-        )
-
-    def _get_effective_rpm_limit_for_model(self, model_name: str) -> int:
-        return self.discovered_rpm_limits.get(
-            model_name,
-            self.settings.get("rpm_limit", settings.default_global_settings["rpm_limit"]),
-        )
-
-    def _record_api_request_timestamp(self, api_key: str):
-        if api_key not in self.api_request_timestamps_per_key:
-            self.api_request_timestamps_per_key[api_key] = collections.deque()
-        self.api_request_timestamps_per_key[api_key].append(time.monotonic())
-
-    def _get_current_rpm_for_key(self, api_key: str) -> int:
-        timestamps = self.api_request_timestamps_per_key.get(api_key)
-        return _cull_and_count_requests(timestamps, 60) if timestamps else 0
-
-    def _is_rpm_limit_reached_for_key(self, api_key: str) -> bool:
-        model = self.settings.get("gemini_model")
-        limit = self._get_effective_rpm_limit_for_model(model)
-        return self._get_current_rpm_for_key(api_key) >= limit
-
-    def on_job_completed(self, job_data: dict, usage_metadata: dict):
-        pass
-
-    def reset(self):
-        pass
-
 class LiteLLMStrategy(AbstractConnectionStrategy):
     def __init__(self, manager, connection_name, connection_settings):
         self.manager = manager
         self.name = connection_name
         self.settings = connection_settings
+        keys = connection_settings.get("api_keys") or []
+        if not keys and connection_settings.get("api_key"):
+            keys = [connection_settings["api_key"]]
+        limits = connection_settings.get("global_limits", {}) or {}
+        self.key_pool = KeyPool(keys, rpm_limit=limits.get("rpm"))
         self.usage_tracker = {"requests": collections.deque(), "tokens": collections.deque()}
         self.backoff_multiplier = 1.0
         self._pending_job_data: Optional[dict] = None
@@ -300,10 +83,13 @@ class LiteLLMStrategy(AbstractConnectionStrategy):
             self.usage_tracker["requests"], 86400
         ) >= rpd:
             return True
-        if (rpm := limits.get("rpm")) is not None and rpm > 0 and _cull_and_count_requests(
-            self.usage_tracker["requests"], 60
-        ) >= rpm:
-            return True
+        # With multiple keys the pool enforces RPM per key, so the
+        # connection-level counter must not stop rotation early.
+        if len(self.key_pool.keys) <= 1:
+            if (rpm := limits.get("rpm")) is not None and rpm > 0 and _cull_and_count_requests(
+                self.usage_tracker["requests"], 60
+            ) >= rpm:
+                return True
         if (tpm := limits.get("tpm")) is not None and tpm > 0 and _cull_and_sum_tokens(
             self.usage_tracker["tokens"], 60
         ) >= tpm:
@@ -319,6 +105,15 @@ class LiteLLMStrategy(AbstractConnectionStrategy):
 
         if not self.manager.is_running():
             return
+
+        if self.key_pool.has_keys:
+            api_key = self.key_pool.next_key()
+            if api_key is None:
+                self._pending_job_data = job_data
+                self._dispatch_timer.start(self.key_pool.next_retry_delay_ms())
+                return
+            job_data["api_key"] = api_key
+            self.key_pool.record_request(api_key)
 
         try:
             self.usage_tracker["requests"].append(time.monotonic())
@@ -385,6 +180,9 @@ class LiteLLMStrategy(AbstractConnectionStrategy):
         if self._is_rate_limited():
             logger.debug(f"Dispatch for '{self.name}' deferred: Rate limit reached.")
             return DispatchReadiness(False, 1000)
+        if self.key_pool.has_keys and self.key_pool.stats()["available"] == 0:
+            logger.debug(f"Dispatch for '{self.name}' deferred: all API keys busy.")
+            return DispatchReadiness(False, self.key_pool.next_retry_delay_ms())
         return DispatchReadiness(True)
 
     def dispatch_job(self, job_data: dict) -> bool:
@@ -457,6 +255,9 @@ class LiteLLMStrategy(AbstractConnectionStrategy):
         
         if not litellm or not isinstance(error, litellm.RateLimitError):
             return
+        api_key = job_data.get("api_key")
+        if api_key:
+            self.key_pool.mark_failed(api_key)
         self.backoff_multiplier = min(self.backoff_multiplier + 1.0, 10.0)
         delay = 1000 * self.backoff_multiplier
         logger.warning(
@@ -465,6 +266,9 @@ class LiteLLMStrategy(AbstractConnectionStrategy):
         self.manager.translation_timer.start(int(delay))
 
     def on_job_completed(self, job_data: dict, usage_metadata: dict):
+        api_key = job_data.get("api_key")
+        if api_key:
+            self.key_pool.mark_success(api_key)
         self.backoff_multiplier = max(1.0, self.backoff_multiplier / 2.0)
         if usage_metadata:
             token_count = usage_metadata.get("total", 0)

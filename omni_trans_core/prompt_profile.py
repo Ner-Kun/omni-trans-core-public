@@ -230,36 +230,25 @@ class PromptProfile:
 
 
 def get_default_profile() -> PromptProfile:
-    """Get the default lorebook profile."""
+    """Return the neutral default profile used when an app does not supply one."""
     return PromptProfile(
-        profile_name="Lorebook Default",
-        profile_description="Default prompt for lorebook translation",
+        profile_name="Default",
+        profile_description="Generic translation prompt",
         version="1.0",
         created_at=datetime.now().strftime("%Y-%m-%d"),
-        system_prompt="""You are a master linguist and loremaster specializing in localization of lore—whether from games, books, histories or invented universes.
-Your mission is to translate LORE keywords from {source_language_name} into {target_language_name}.
+        system_prompt="""You are a professional translator.
+Translate the given term from {source_language_name} into {target_language_name}.
+Keep the result concise and accurate. Return only the translation, without quotes or explanations.
 
-1. Output must be concise, accurate — only the translated term.
-2. Proper nouns (places, names, items, technologies, mythic concepts):
-   • If there's an official or accepted translation in this canon or community, use it.
-   • Otherwise, provide a natural‑sounding transliteration when appropriate.
-
-{context_instructions}
-
-STRICTLY no extra text, quotation marks, or explanation—deliver only the final translation.""",
-        user_prompt="""{source_language_name} keyword: "{keyword}"
+{context_instructions}""",
+        user_prompt="""{source_language_name} term: "{keyword}"
 {target_language_name} translation:""",
-        regen_prompt="""The {source_language_name} keyword is "{keyword}".
-The previous translation attempt was "{wrong_keyword}", which is incorrect or unsatisfactory.
-Provide a better, alternative translation into {target_language_name}.
+        regen_prompt="""The {source_language_name} term is "{keyword}".
+The previous translation "{wrong_keyword}" is not acceptable.
+Provide a better translation into {target_language_name}.
 New {target_language_name} translation:""",
-        context_instructions="""Use the <context> section to capture genre, usage, significance:
+        context_instructions="""Use the <context> section to understand the domain and intended usage:
 <context>
 {context_section}
-</context>
-
-Detailed context helps you determine:
-– If this is a mythic creature, a historical event, a slang term, a poetic concept?
-– Should you invent a neologism fitting genre conventions?
-– Or prefer a literal translation for clarity?""",
+</context>""",
     )

@@ -31,6 +31,7 @@ GLOBAL_CRASH_LOGS_DIR = ""  # settings/global/crash_logs/
 NOTIFICATIONS_HISTORY_FILE = ""  # settings/global/notifications_history.json
 APP_SETTINGS_DIR = "" # settings/{app_id}/
 APP_SETTINGS_FILE = "" # settings/{app_id}/app_settings.yaml
+APP_PROMPTS_DIR = ""  # settings/{app_id}/prompts/
 
 # === Текущий app_id ===
 CURRENT_APP_ID = ""
@@ -61,9 +62,11 @@ def get_default_generation_params():
 
 # === ОБЩИЕ настройки (global/) ===
 default_global_settings: dict[str, Any] = {
+    # Legacy Gemini settings: read once by gemini_migration, then unused.
+    # Remove together with the legacy UI after one release.
     "api_keys": [],
     "current_api_key_index": 0,
-    "active_connection_name": "Google Gemini",
+    "active_connection_name": "",
     "active_model_for_connection": {},
     "gemini_generation_params": get_default_generation_params(),
     "gemini_model": "gemini-2.5-flash-lite-preview-06-17",
@@ -75,15 +78,7 @@ default_global_settings: dict[str, Any] = {
     "rpm_monitor_update_interval_ms": 1000,
     "api_thread_pool_ratio": 0.75,
     "proxy_enabled": False,
-    "proxy_mode": "disabled",
-    "proxy_protocol": "all",
-    "proxy_country": "",
     "proxy_custom_list": [],
-    "proxy_validate_on_start": True,
-    "proxy_validate_after_use": False,
-    "proxy_validate_custom": False,
-    "proxy_search_workers": 2,
-    "theme_name": "black",
     "user_language": "en",
     "log_to_file": False,
     "log_level": "INFO",
@@ -98,11 +93,6 @@ default_global_settings: dict[str, Any] = {
     },
     "thinking_failure_threshold": 3,
     "CORE_VERSION": CORE_VERSION,
-    # Prompt Editor Settings
-    "active_prompt_profile": "Lorebook Default",
-    "prompt_editor_show_line_numbers": True,
-    "prompt_editor_highlight_placeholders": True,
-    "prompt_editor_font_size": 11,
 }
 
 # === ИНДИВИДУАЛЬНЫЕ настройки приложения ===
@@ -113,7 +103,7 @@ default_app_settings: dict[str, Any] = {
     "available_source_languages": ["English"],
     "selected_source_language": "English",
     "auto_save_interval_ms": 5000,
-    "ux_hide_discover_limits_warning": False,
+    "active_prompt_profile": "",
     "ux_show_wip_on_startup": True,
 }
 
@@ -125,25 +115,42 @@ _global_settings: dict[str, Any] = {}
 _app_settings: dict[str, Any] = {}
 
 
-def initialize_app_paths(project_root_path: str, app_id: str = None):
+def initialize_app_paths(project_root_path: str, app_id: str | None = None):
     global \
         PROJECT_ROOT, \
         SETTINGS_DIR, CONNECTIONS_DIR, OLD_SETTINGS_JSON_FILE, SETTINGS_FILE, LOG_FILE, MODELS_DEV_CACHE_FILE, \
         GLOBAL_SETTINGS_DIR, GLOBAL_SETTINGS_FILE, GLOBAL_CONNECTIONS_DIR, GLOBAL_PROMPTS_DIR, GLOBAL_CRASH_LOGS_DIR, NOTIFICATIONS_HISTORY_FILE, \
-        APP_SETTINGS_DIR, APP_SETTINGS_FILE, \
+        APP_SETTINGS_DIR, APP_SETTINGS_FILE, APP_PROMPTS_DIR, \
         CURRENT_APP_ID
 
     PROJECT_ROOT = project_root_path
 
     # Определяем app_id
     if app_id is None:
-        # Извлекаем из стека вызовов: ищем runner.py
+        # Fallback: accept only a runner.py that lives directly under PROJECT_ROOT.
+        # This skips pytest's _pytest/runner.py and any package-installed runner.
+        root = os.path.abspath(PROJECT_ROOT)
         for frame in inspect.stack():
-            if 'runner.py' in frame.filename:
-                app_id = os.path.basename(os.path.dirname(frame.filename))
-                break
+            frame_path = os.path.abspath(frame.filename)
+            if os.path.basename(frame_path) != "runner.py":
+                continue
+            candidate_dir = os.path.dirname(frame_path)
+            if os.path.dirname(candidate_dir) != root:
+                continue
+            app_id = os.path.basename(candidate_dir)
+            logger.warning(
+                "app_id was not passed explicitly; resolved '%s' from the call stack. "
+                "Pass app_id to initialize_app_paths().",
+                app_id,
+            )
+            break
 
     CURRENT_APP_ID = app_id if app_id else ""
+    if not CURRENT_APP_ID:
+        logger.error(
+            "app_id is not set: app settings will not be persisted and migrations "
+            "that need the app scope will be skipped."
+        )
 
     # Старые пути (для обратной совместимости и миграции)
     SETTINGS_DIR = os.path.join(PROJECT_ROOT, "settings")
@@ -165,13 +172,21 @@ def initialize_app_paths(project_root_path: str, app_id: str = None):
     if CURRENT_APP_ID:
         APP_SETTINGS_DIR = os.path.join(PROJECT_ROOT, "settings", CURRENT_APP_ID)
         APP_SETTINGS_FILE = os.path.join(APP_SETTINGS_DIR, "app_settings.yaml")
+        APP_PROMPTS_DIR = os.path.join(APP_SETTINGS_DIR, "prompts")
     else:
         APP_SETTINGS_DIR = ""
         APP_SETTINGS_FILE = ""
+        APP_PROMPTS_DIR = ""
 
     logger.debug(f"Initialized paths for app_id='{CURRENT_APP_ID}'")
     logger.debug(f"GLOBAL_SETTINGS_FILE: {GLOBAL_SETTINGS_FILE}")
     logger.debug(f"APP_SETTINGS_FILE: {APP_SETTINGS_FILE}")
+    logger.debug(f"APP_PROMPTS_DIR: {APP_PROMPTS_DIR}")
+
+
+def get_prompts_dir() -> str:
+    """Return the prompt profile directory for the current app."""
+    return APP_PROMPTS_DIR or GLOBAL_PROMPTS_DIR
 
 
 def _migrate_settings(loaded_data: dict[str, Any]) -> dict[str, Any]:
@@ -290,24 +305,8 @@ def _validate_and_clean_settings(settings_data: dict[str, Any]) -> None:
         settings_data["active_model_for_connection"], dict
     ):
         settings_data["active_model_for_connection"] = {}
-    valid_modes = {"disabled", "auto", "custom", "mixed"}
-
-    if settings_data.get("proxy_mode") not in valid_modes:
-        settings_data["proxy_mode"] = "disabled"
-    if not isinstance(settings_data.get("proxy_protocol"), str):
-        settings_data["proxy_protocol"] = "all"
-    if not isinstance(settings_data.get("proxy_country"), str):
-        settings_data["proxy_country"] = ""
     if not isinstance(settings_data.get("proxy_custom_list"), list):
         settings_data["proxy_custom_list"] = []
-    if not isinstance(settings_data.get("proxy_validate_on_start"), bool):
-        settings_data["proxy_validate_on_start"] = True
-    if not isinstance(settings_data.get("proxy_validate_after_use"), bool):
-        settings_data["proxy_validate_after_use"] = False
-    if not isinstance(settings_data.get("proxy_validate_custom"), bool):
-        settings_data["proxy_validate_custom"] = False
-    if not isinstance(settings_data.get("proxy_search_workers"), int):
-        settings_data["proxy_search_workers"] = 2
 
     valid_proxies = []
     for p in settings_data["proxy_custom_list"]:
@@ -322,12 +321,26 @@ def _validate_and_clean_settings(settings_data: dict[str, Any]) -> None:
     settings_data["proxy_custom_list"] = valid_proxies
 
     if "notifications" not in settings_data or not isinstance(settings_data.get("notifications"), dict):
-        settings_data["notifications"] = default_global_settings["notifications"]
+        settings_data["notifications"] = copy.deepcopy(default_global_settings["notifications"])
     else:
         notif_defaults = default_global_settings["notifications"]
         for key, default_val in notif_defaults.items():
             if key not in settings_data["notifications"]:
-                settings_data["notifications"][key] = default_val
+                settings_data["notifications"][key] = copy.deepcopy(default_val)
+
+
+def _atomic_write_yaml(path: str, data, yaml: YAML) -> None:
+    """Write YAML through a temp file so a crash cannot truncate the real file."""
+    tmp_path = f"{path}.tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def _migrate_old_json_settings(yaml):
@@ -409,15 +422,21 @@ def _migrate_to_new_structure(yaml):
                 logger.warning(f"Unknown setting key '{key}' - adding to global settings")
                 global_settings_data[key] = value
 
+        if app_settings_data and not APP_SETTINGS_FILE:
+            logger.error(
+                "Cannot migrate app settings: app_id is not resolved. "
+                "Migration aborted to avoid losing %d app keys.",
+                len(app_settings_data),
+            )
+            return
+
         # Сохраняем глобальные настройки
-        with open(GLOBAL_SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            yaml.dump(global_settings_data, f)
+        _atomic_write_yaml(GLOBAL_SETTINGS_FILE, global_settings_data, yaml)
         logger.info(f"Saved global settings to '{GLOBAL_SETTINGS_FILE}'")
 
         # Сохраняем настройки приложения (если есть app_id и данные)
         if APP_SETTINGS_FILE and app_settings_data:
-            with open(APP_SETTINGS_FILE, 'w', encoding='utf-8') as f:
-                yaml.dump(app_settings_data, f)
+            _atomic_write_yaml(APP_SETTINGS_FILE, app_settings_data, yaml)
             logger.info(f"Saved app settings to '{APP_SETTINGS_FILE}'")
 
         # Переносим соединения
@@ -462,7 +481,7 @@ def load_global_settings():
     yaml.indent(mapping=2, sequence=4, offset=2)
     yaml.preserve_quotes = True
 
-    _global_settings = default_global_settings.copy()
+    _global_settings = copy.deepcopy(default_global_settings)
 
     if os.path.exists(GLOBAL_SETTINGS_FILE):
         try:
@@ -506,9 +525,15 @@ def load_app_settings():
     """Загружает индивидуальные настройки приложения."""
     global _app_settings
 
-    _app_settings = default_app_settings.copy()
+    _app_settings = copy.deepcopy(default_app_settings)
 
-    if not APP_SETTINGS_FILE or not os.path.exists(APP_SETTINGS_FILE):
+    if not APP_SETTINGS_FILE:
+        logger.warning(
+            "APP_SETTINGS_FILE is not set: app settings will use defaults and will not be saved."
+        )
+        return
+
+    if not os.path.exists(APP_SETTINGS_FILE):
         logger.info("No app-specific settings file, using defaults")
         return
 
@@ -561,6 +586,12 @@ def load_settings():
     current_settings.update(_global_settings)
     current_settings.update(_app_settings)
 
+    # Legacy Gemini settings become a normal connection profile.
+    from .gemini_migration import migrate_legacy_gemini_settings
+
+    if migrate_legacy_gemini_settings(current_settings):
+        logger.info("Migrated legacy Gemini settings into a 'Google Gemini' connection.")
+
     # Устанавливаем версию ядра
     current_settings["CORE_VERSION"] = CORE_VERSION
 
@@ -601,8 +632,7 @@ def save_global_settings():
             settings_to_save["current_api_key_index"] = 0
 
         # Сохраняем основные настройки
-        with open(GLOBAL_SETTINGS_FILE, "w", encoding="utf-8") as f:
-            yaml.dump(settings_to_save, f)
+        _atomic_write_yaml(GLOBAL_SETTINGS_FILE, settings_to_save, yaml)
 
         # Управление файлами соединений
         current_conn_ids = {conn["id"] for conn in connections if "id" in conn}
@@ -625,8 +655,7 @@ def save_global_settings():
             if not conn_id:
                 continue
             file_path = os.path.join(GLOBAL_CONNECTIONS_DIR, f"{conn_id}.yaml")
-            with open(file_path, "w", encoding="utf-8") as f:
-                yaml.dump(conn, f)
+            _atomic_write_yaml(file_path, conn, yaml)
 
         logger.info("Global settings and connections saved.")
 
@@ -638,7 +667,11 @@ def save_app_settings():
     """Сохраняет индивидуальные настройки приложения."""
     global _app_settings
 
-    if not APP_SETTINGS_FILE or not _app_settings:
+    if not APP_SETTINGS_FILE:
+        logger.warning("APP_SETTINGS_FILE is not set: app settings were not saved.")
+        return
+
+    if not _app_settings:
         return
 
     yaml = YAML()
@@ -648,8 +681,7 @@ def save_app_settings():
     os.makedirs(APP_SETTINGS_DIR, exist_ok=True)
 
     try:
-        with open(APP_SETTINGS_FILE, "w", encoding="utf-8") as f:
-            yaml.dump(_app_settings, f)
+        _atomic_write_yaml(APP_SETTINGS_FILE, _app_settings, yaml)
         logger.info(f"App settings saved to {APP_SETTINGS_FILE}")
     except Exception as e:
         logger.error(f"Failed to save app settings: {e}")
@@ -673,6 +705,9 @@ def save_settings():
         if key in current_settings:
             _app_settings[key] = current_settings[key]
 
+    # Session-only keys (ux_t_count, ux_next_prompt, ux_dialog_shown,
+    # translation_mode_enabled, active_connections_list) are intentionally
+    # not persisted: they reset every launch.
     # Сохраняем
     save_global_settings()
     save_app_settings()

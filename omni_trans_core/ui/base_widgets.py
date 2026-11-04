@@ -1,14 +1,12 @@
 import logging
 from PySide6 import QtWidgets, QtCore, QtGui
-from PySide6.QtCore import Qt
+from qfluentwidgets import LineEdit, TableWidget, TextEdit
+
 from .animations import UIAnimator
-from .. import settings
 
 logger = logging.getLogger('CORE_UI.base_widgets')
 
-INFO_BUTTON_FIXED_SIZE = 18
-
-class ShakeLineEdit(QtWidgets.QLineEdit):
+class ShakeLineEdit(LineEdit):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.animation = QtCore.QPropertyAnimation(self, b"pos")
@@ -46,14 +44,14 @@ class ShakeLineEdit(QtWidgets.QLineEdit):
     def _shake(self):
         UIAnimator.shake_widget(self)
 
-class FocusOutTextEdit(QtWidgets.QTextEdit):
+class FocusOutTextEdit(TextEdit):
     focus_out = QtCore.Signal()
 
     def focusOutEvent(self, event: QtGui.QFocusEvent):
         self.focus_out.emit()
         super().focusOutEvent(event)
 
-class FilterableTableWidget(QtWidgets.QTableWidget):
+class FilterableTableWidget(TableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._searchable_columns = []
@@ -85,63 +83,3 @@ class FilterableTableWidget(QtWidgets.QTableWidget):
                     if term in self._original_data_map[row]:
                         should_be_visible = True
             self.setRowHidden(row, not should_be_visible)
-
-class HelpTooltip(QtWidgets.QWidget):
-    _instance = None
-
-    def __init__(self, parent=None):
-        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint)
-        self.setFocusPolicy(Qt.NoFocus)
-        layout = QtWidgets.QVBoxLayout(self)
-        self.label = QtWidgets.QLabel()
-        self.label.setTextInteractionFlags(Qt.TextBrowserInteraction)
-        self.label.setWordWrap(True)
-        self.label.setOpenExternalLinks(True)
-        self.label.setTextFormat(QtCore.Qt.RichText)
-        layout.addWidget(self.label)
-
-    def closeEvent(self, event):
-        logger.debug("HelpTooltip closed.")
-        if HelpTooltip._instance is self:
-            HelpTooltip._instance = None
-        self.deleteLater()
-        super().closeEvent(event)
-
-    @staticmethod
-    def show_text(pos: QtCore.QPoint, text: str, parent_for_filter: QtWidgets.QWidget):
-        if HelpTooltip._instance:
-            HelpTooltip._instance.close()
-        tooltip = HelpTooltip(None)
-        HelpTooltip._instance = tooltip
-        tooltip.label.setText(text)
-        tooltip.adjustSize()
-        screen_geometry = parent_for_filter.screen().availableGeometry()
-        if pos.x() + tooltip.width() > screen_geometry.right():
-            pos.setX(screen_geometry.right() - tooltip.width())
-        if pos.y() + tooltip.height() > screen_geometry.bottom():
-            pos.setY(pos.y() - tooltip.height() - 30)
-        tooltip.move(pos)
-        tooltip.show()
-        logger.debug("HelpTooltip shown.")
-
-class InfoButton(QtWidgets.QPushButton):
-    def __init__(self, help_text, parent=None):
-        super().__init__("i", parent)
-        self._help_text = help_text
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-        self.setFixedSize(INFO_BUTTON_FIXED_SIZE, INFO_BUTTON_FIXED_SIZE)
-        self.clicked.connect(self._show_help)
-
-    def setHelpText(self, text: str):
-        self._help_text = text
-
-    def _show_help(self):
-        if self._help_text.startswith("http://") or self._help_text.startswith(
-            "https://"
-        ):
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl(self._help_text))
-        else:
-            point = self.mapToGlobal(self.rect().bottomLeft())
-            point.setY(point.y() + 2)
-            parent_window = self.window()
-            HelpTooltip.show_text(point, self._help_text, parent_window)

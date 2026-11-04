@@ -1,13 +1,8 @@
 import re
 import logging
-import importlib.util
 from .interfaces import AbstractResponseParser, UsageMetadata
 from typing import Any, override
 
-
-genai_types_available = importlib.util.find_spec("google.genai") is not None
-if genai_types_available:
-    from google.genai import types as genai_types
 
 logger = logging.getLogger('CORE.response_parser')
 
@@ -16,46 +11,7 @@ class DefaultResponseParser(AbstractResponseParser):
     def parse(
         self, response: Any, job_data: dict[str, Any]
     ) -> tuple[str, str, UsageMetadata]:
-        provider = job_data.get("provider")
-        if provider == "gemini":
-            return self._parse_gemini(response)
-        else:
-            return self._parse_litellm(response, job_data)
-
-    def _parse_gemini(
-        self, response: "genai_types.GenerateContentResponse"
-    ) -> tuple[str, str, UsageMetadata]:
-        thinking_text_parts = []
-        raw_resp_text_parts = []
-        usage_metadata: UsageMetadata = {}
-        if hasattr(response, "candidates") and response.candidates:
-            content = response.candidates[0].content
-            if content and content.parts:
-                for part in content.parts:
-                    part_text = getattr(part, "text", "")
-                    if not part_text:
-                        continue
-                    if hasattr(part, "thought") and part.thought:
-                        thinking_text_parts.append(part_text)
-                    else:
-                        raw_resp_text_parts.append(part_text)
-        thinking_text_output = "".join(thinking_text_parts).strip()
-        final_processed_translation = "".join(raw_resp_text_parts).strip().strip('"')
-        if hasattr(response, "usage_metadata") and response.usage_metadata:
-            usage_metadata["prompt"] = getattr(
-                response.usage_metadata, "prompt_token_count", 0
-            )
-            if hasattr(response.usage_metadata, "thoughts_token_count"):
-                usage_metadata["thoughts"] = getattr(
-                    response.usage_metadata, "thoughts_token_count", 0
-                )
-            usage_metadata["candidates"] = getattr(
-                response.usage_metadata, "candidates_token_count", 0
-            )
-            usage_metadata["total"] = getattr(
-                response.usage_metadata, "total_token_count", 0
-            )
-        return final_processed_translation, thinking_text_output, usage_metadata
+        return self._parse_litellm(response, job_data)
 
     def _extract_thinking_from_message(self, message: Any, is_dict: bool) -> str | None:
         if is_dict:
@@ -246,6 +202,16 @@ class DefaultResponseParser(AbstractResponseParser):
                 usage_metadata["prompt"] = usage_dict.get("prompt_tokens", 0)
                 usage_metadata["candidates"] = usage_dict.get("completion_tokens", 0)
                 usage_metadata["total"] = usage_dict.get("total_tokens", 0)
+                details = usage_dict.get("completion_tokens_details") or {}
+                if isinstance(details, dict):
+                    reasoning_tokens = details.get("reasoning_tokens")
+                else:
+                    reasoning_tokens = getattr(details, "reasoning_tokens", None)
+                usage_metadata["thoughts"] = (
+                    reasoning_tokens
+                    or usage_dict.get("thoughts_token_count", 0)
+                    or 0
+                )
         
         except (AttributeError, IndexError, KeyError) as e:
             logger.error(f"Could not parse LiteLLM response: {e}", exc_info=True)

@@ -13,31 +13,73 @@ logger = logging.getLogger('CORE.prompt_profile_manager')
 
 class PromptProfileManager:
     """Manages prompt profile files."""
-    
-    def __init__(self, profiles_dir: Optional[str] = None):
+
+    def __init__(
+        self,
+        profiles_dir: Optional[str] = None,
+        default_profile: Optional[PromptProfile] = None,
+    ):
         """
         Initialize the profile manager.
-        
+
         Args:
-            profiles_dir: Directory to store profiles. If None, uses default.
+            profiles_dir: Directory to store profiles. If None, uses the
+                current app's prompts directory.
+            default_profile: Profile supplied by the application. Used when
+                the profiles directory has no profiles yet.
         """
         self._profiles_dir = profiles_dir
         self._profiles_cache: dict[str, PromptProfile] = {}
-        self._default_profile: Optional[PromptProfile] = None
-    
+        self._default_profile = default_profile
+        self._migrated_global_profiles = False
+
     @property
     def profiles_dir(self) -> str:
         """Get the profiles directory, creating it if necessary."""
         if self._profiles_dir is None:
             from . import settings
-            self._profiles_dir = os.path.join(settings.GLOBAL_SETTINGS_DIR, "prompts")
-        
-        # Ensure directory exists
+            self._profiles_dir = settings.get_prompts_dir()
+
         if not os.path.exists(self._profiles_dir):
             os.makedirs(self._profiles_dir, exist_ok=True)
             logger.info(f"Created prompts directory: {self._profiles_dir}")
-        
+
+        self._migrate_global_profiles()
         return self._profiles_dir
+
+    def _migrate_global_profiles(self) -> None:
+        """Copy profiles from the old global directory into the app scope once."""
+        if self._migrated_global_profiles:
+            return
+        self._migrated_global_profiles = True
+
+        from . import settings
+
+        global_dir = settings.GLOBAL_PROMPTS_DIR
+        if not global_dir or not os.path.isdir(global_dir):
+            return
+        if os.path.normcase(os.path.abspath(global_dir)) == os.path.normcase(
+            os.path.abspath(self._profiles_dir)
+        ):
+            return
+        if any(name.endswith(".md") for name in os.listdir(self._profiles_dir)):
+            return
+
+        copied = 0
+        for filename in os.listdir(global_dir):
+            if not filename.endswith(".md"):
+                continue
+            shutil.copy2(
+                os.path.join(global_dir, filename),
+                os.path.join(self._profiles_dir, filename),
+            )
+            copied += 1
+        if copied:
+            logger.info(
+                "Copied %d prompt profiles from global scope to %s",
+                copied,
+                self._profiles_dir,
+            )
     
     def _get_profile_path(self, profile_name: str) -> str:
         """Get the file path for a profile by name."""
@@ -58,10 +100,8 @@ class PromptProfileManager:
             logger.info(f"Profiles directory does not exist, creating: {self.profiles_dir}")
             os.makedirs(self.profiles_dir, exist_ok=True)
             # Create default profile
-            default = get_default_profile()
-            self._save_profile_to_file(default)
+            default = self.get_default_profile()
             profiles.append(default)
-            self._profiles_cache[default.profile_name] = default
             return profiles
         
         for filename in os.listdir(self.profiles_dir):
@@ -81,10 +121,7 @@ class PromptProfileManager:
         # If no profiles found, create default
         if not profiles:
             logger.info("No profiles found, creating default profile")
-            default = get_default_profile()
-            self._save_profile_to_file(default)
-            profiles.append(default)
-            self._profiles_cache[default.profile_name] = default
+            profiles.append(self.get_default_profile())
         
         return profiles
     
@@ -130,15 +167,14 @@ class PromptProfileManager:
     def get_default_profile(self) -> PromptProfile:
         """Get or create the default profile."""
         if self._default_profile is None:
-            # Try to load existing default
-            default = self.get_profile("Lorebook Default")
-            if default:
-                self._default_profile = default
-            else:
-                # Create new default
-                self._default_profile = get_default_profile()
-                self._save_profile_to_file(self._default_profile)
-        
+            self._default_profile = get_default_profile()
+
+        existing = self.get_profile(self._default_profile.profile_name)
+        if existing is not None:
+            return existing
+
+        self._save_profile_to_file(self._default_profile)
+        self._profiles_cache[self._default_profile.profile_name] = self._default_profile
         return self._default_profile
     
     def save_profile(self, profile: PromptProfile) -> bool:
@@ -176,7 +212,7 @@ class PromptProfileManager:
             return False
         
         # Don't allow deleting the default profile
-        if profile_name == "Lorebook Default":
+        if profile_name == self.get_default_profile().profile_name:
             logger.warning("Cannot delete the default profile")
             return False
         
@@ -209,8 +245,8 @@ class PromptProfileManager:
         if self.get_profile(profile_name):
             raise ValueError(f"Profile with name '{profile_name}' already exists")
 
-        # Create new profile based on default (get_default_profile returns a NEW object each time)
-        new_profile = get_default_profile()
+        # Create new profile based on the current default
+        new_profile = self.get_default_profile().copy()
         new_profile.profile_name = profile_name
         new_profile.profile_description = description
         new_profile._file_path = None  # Will be set on save

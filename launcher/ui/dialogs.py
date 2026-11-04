@@ -1,159 +1,101 @@
 import webbrowser
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
-from PySide6.QtCore import Qt, QSize, Slot
+from PySide6.QtCore import QSize, Qt, Slot
+from qfluentwidgets import Dialog, FluentIcon, PushButton, TransparentToolButton
 
-from launcher.ui.widgets import AnimatedIconButton
-from launcher.utils.animations import DonateAnimator
+from launcher.utils.heartbeat import HeartbeatAnimator
 from launcher.utils.icon_manager import IconManager
 
 
-
-class DonationDialog(QDialog):
+class DonationDialog(Dialog):
     def __init__(self, parent, app_name, launch_count, donate_url):
-        super().__init__(parent)
+        super().__init__("Support development", "", parent)
+        self.setFixedSize(440, 380)
         self.donate_url = donate_url
 
-        self.setObjectName("DonationDialog")
-
-        self.setWindowTitle("Support Development")
-        self.setFixedSize(450, 320)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(15)
-        layout.setContentsMargins(30, 30, 30, 30)
-
-        icon_container = QHBoxLayout()
-        icon_container.addStretch()
-
-        self.heart_btn = AnimatedIconButton()
-        self.heart_btn.setObjectName("DonateIcon")
-        self.heart_btn.setFixedSize(80, 80)
-        self.heart_btn.setIconSize(QSize(64, 64))
-        self.heart_btn.setIcon(IconManager.get_qicon("donate"))
-        self.heart_btn.setCursor(Qt.PointingHandCursor)
-        self.heart_btn.clicked.connect(
-            self.on_support_clicked
+        self.titleLabel.setText(f"Wow! {launch_count} launches!")
+        self.titleLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.contentLabel.setText(
+            f"You've used {app_name} {launch_count} times.\n\n"
+            "It's free to use, but development takes time and effort.\n\n"
+            "Support helps keep it going."
         )
+        self.contentLabel.setWordWrap(True)
+        self.contentLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.contentLabel.setFixedWidth(392)
 
-        self.animator = DonateAnimator(self.heart_btn)
-        self.animator.selected_type = "heartbeat"
-        self.animator.start()
-
-        icon_container.addWidget(self.heart_btn)
-        icon_container.addStretch()
-        layout.addLayout(icon_container)
-
-        title = QLabel(f"Wow! {launch_count} Launches!")
-        title.setObjectName("DonateTitle")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-
-        msg = QLabel(
-            f"You've used {app_name} {launch_count} times.\n"
-            "It's free to use, but its development takes time and effort.\n"
-            "Support helps continue its development."
+        heart = TransparentToolButton(self)
+        donate_icon = IconManager.get_qicon("donate")
+        heart.setIcon(
+            donate_icon if not donate_icon.isNull() else FluentIcon.HEART.icon()
         )
-        msg.setObjectName("DonateMessage")
-        msg.setWordWrap(True)
-        msg.setAlignment(Qt.AlignCenter)
-        layout.addWidget(msg)
+        heart.setIconSize(QSize(48, 48))
+        heart.setFixedSize(64, 64)
+        heart.setStyleSheet("background: transparent; border: none;")
+        heart.clicked.connect(self._open_donate)
+        self.textLayout.insertWidget(0, heart, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        layout.addStretch()
+        self.heart = heart
+        self.heart_animator = HeartbeatAnimator(
+            heart,
+            QSize(48, 48),
+            QSize(56, 56),
+            1500,
+            self,
+        )
+        self.heart_animator.start()
 
-        btn_layout = QHBoxLayout()
-
-        self.btn_later = QPushButton("Later")
-        self.btn_later.setObjectName("LaterBtn")
-        self.btn_later.setCursor(Qt.PointingHandCursor)
-        self.btn_later.clicked.connect(self.reject)
-
-        self.btn_support = QPushButton("Support")
-        self.btn_support.setObjectName("SupportBtn")
-        self.btn_support.setCursor(Qt.PointingHandCursor)
-        self.btn_support.setFixedSize(140, 40)
-        self.btn_support.clicked.connect(self.on_support_clicked)
-
-        btn_layout.addWidget(self.btn_later)
-        btn_layout.addWidget(self.btn_support)
-
-        layout.addLayout(btn_layout)
+        self.yesButton.setText("Support")
+        self.cancelButton.setText("Later")
+        self.yesButton.clicked.disconnect()
+        self.yesButton.clicked.connect(self._open_donate)
 
     @Slot()
-    def on_support_clicked(self):
+    def _open_donate(self):
         webbrowser.open(self.donate_url)
         self.accept()
 
+    def closeEvent(self, event):
+        self.heart_animator.stop()
+        super().closeEvent(event)
 
-class CriticalUpdateDialog(QDialog):
+
+class CriticalUpdateDialog(Dialog):
     def __init__(self, parent, app_name, current_ver, new_ver):
-        super().__init__(parent)
-        self.setObjectName("CriticalUpdateDialog")
+        super().__init__("Critical update", "", parent)
+        self.result_action = "cancel"
 
-        self.setWindowTitle("Critical Update Required")
-        self.setFixedSize(450, 280)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(15)
-        layout.setContentsMargins(30, 30, 30, 30)
-        
-        title = QLabel(f"Critical Update for {app_name}")
-        title.setObjectName("CriticalTitle")
-        title.setAlignment(Qt.AlignCenter)
-        title.setWordWrap(True)
-        layout.addWidget(title)
-
-        msg = QLabel(
-            f"You are using version <b>{current_ver}</b>.<br>"
+        self.titleLabel.setText(f"Critical update for {app_name}")
+        self.contentLabel.setText(
+            f"You are using <b>{current_ver}</b>.<br>"
             f"Version <b>{new_ver}</b> contains important fixes.<br><br>"
             "It is highly recommended to update before launching."
         )
-        msg.setObjectName("CriticalMessage")
-        msg.setWordWrap(True)
-        msg.setAlignment(Qt.AlignCenter)
-        layout.addWidget(msg)
+        self.contentLabel.setWordWrap(True)
 
-        layout.addStretch()
+        self.cancel_btn = PushButton("Cancel", self)
+        self.buttonLayout.insertWidget(0, self.cancel_btn)
 
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(10)
+        self.yesButton.setText("Update now")
+        self.cancelButton.setText("Launch anyway")
 
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setObjectName("CriticalCancelBtn")
-        self.btn_cancel.setCursor(Qt.PointingHandCursor)
-        self.btn_cancel.clicked.connect(self.reject)
-
-        self.btn_launch_anyway = QPushButton("Launch Anyway")
-        self.btn_launch_anyway.setObjectName("CriticalLaunchBtn")
-        self.btn_launch_anyway.setCursor(Qt.PointingHandCursor)
-        self.btn_launch_anyway.clicked.connect(self.on_launch_anyway)
-
-        self.btn_update = QPushButton("Update Now")
-        self.btn_update.setObjectName("CriticalUpdateBtn")
-        self.btn_update.setCursor(Qt.PointingHandCursor)
-        self.btn_update.clicked.connect(self.accept)
-
-        btn_layout.addWidget(self.btn_cancel)
-        btn_layout.addWidget(self.btn_launch_anyway)
-        btn_layout.addWidget(self.btn_update)
-
-        layout.addLayout(btn_layout)
-
-        self.result_action = "cancel"
+        self.yesButton.clicked.disconnect()
+        self.cancelButton.clicked.disconnect()
+        self.yesButton.clicked.connect(self._choose_update)
+        self.cancelButton.clicked.connect(self._choose_launch)
+        self.cancel_btn.clicked.connect(self._choose_cancel)
 
     @Slot()
-    def on_launch_anyway(self):
-        self.result_action = "launch"
-        super().accept()
-
-    @Slot()
-    def accept(self):
+    def _choose_update(self):
         self.result_action = "update"
-        super().accept()
+        self.accept()
 
     @Slot()
-    def reject(self):
+    def _choose_launch(self):
+        self.result_action = "launch"
+        self.accept()
+
+    @Slot()
+    def _choose_cancel(self):
         self.result_action = "cancel"
-        super().reject()
+        self.reject()

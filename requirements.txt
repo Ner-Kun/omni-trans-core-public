@@ -4,12 +4,10 @@ PySide6==6.12.0
 PySide6-Fluent-Widgets[full]==1.11.3
 litellm==1.106.6
 openai==2.54.0
-google-genai==2.34.0
-google-api-core==2.43.2
 httpx[socks]==0.28.1
 requests==2.34.2
+# Launcher: process detection for the "already running" state.
+psutil==7.2.2
 ruamel.yaml==0.19.1
 rich==15.0.0
 packaging==26.3
-# Транзитивный, поднят из-за предупреждения google-api-core про PQC.
-grpcio==1.85.1

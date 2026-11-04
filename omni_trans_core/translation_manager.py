@@ -2,7 +2,7 @@ import logging
 import collections
 from typing import TYPE_CHECKING, TypedDict, NotRequired, cast, Any, Dict
 from enum import Enum, auto
-from .strategies import GeminiStrategy, LiteLLMStrategy
+from .strategies import LiteLLMStrategy
 from PySide6 import QtCore, QtWidgets
 from . import settings
 from .localization_manager import translate
@@ -17,7 +17,6 @@ except ImportError:
 
 if TYPE_CHECKING:
     from .core import CoreApp
-    from .strategies import GeminiStrategy, LiteLLMStrategy
 
 logger = logging.getLogger('CORE.translation_manager')
 
@@ -93,7 +92,7 @@ class TranslationManager(QtCore.QObject):
     total_jobs_for_progress: int
     completed_jobs_for_progress: int
     _state: State
-    strategies: dict[str, 'GeminiStrategy | LiteLLMStrategy']
+    strategies: dict[str, LiteLLMStrategy]
     models_without_thoughts_support: set[str]
     _thinking_failure_counts: dict[tuple[str, str], int]
     active_connection_name: str | None
@@ -114,14 +113,7 @@ class TranslationManager(QtCore.QObject):
         self.prompt_formatter = prompt_formatter
         self.response_parser = response_parser
         self.thread_pool = app_ref.thread_pool
-        total_threads: int = self.thread_pool.maxThreadCount()
-        ratio: float = float(
-            cast(float, settings.current_settings.get("api_thread_pool_ratio", 0.75))
-        )
-        self.max_api_jobs = max(1, min(total_threads - 1, int(total_threads * ratio)))
-        logger.debug(
-            f"ThreadPool configured: Total={total_threads}, API Job Limit={self.max_api_jobs}"
-        )
+        self.refresh_api_job_limit()
         self.pending_translation_jobs = collections.deque()
         self.active_translation_jobs = 0
         self._active_jobs_per_connection: dict[str, int] = {}
@@ -143,6 +135,14 @@ class TranslationManager(QtCore.QObject):
             self.update_rpm_display_and_check_cooldown
         )
         _ = self.inspector_update.connect(self.send_data_to_inspector)
+
+    def refresh_api_job_limit(self) -> None:
+        total_threads = self.thread_pool.maxThreadCount()
+        ratio = float(settings.current_settings.get("api_thread_pool_ratio", 0.75))
+        self.max_api_jobs = max(1, min(total_threads - 1, int(total_threads * ratio)))
+        logger.debug(
+            f"ThreadPool configured: Total={total_threads}, API Job Limit={self.max_api_jobs}"
+        )
 
     def reset_batch_state(self) -> None:
         self._state = State.IDLE
@@ -185,9 +185,6 @@ class TranslationManager(QtCore.QObject):
 
     def _initialize_strategies(self) -> None:
         self.strategies.clear()
-        self.strategies["Google Gemini"] = GeminiStrategy(
-            self, "Google Gemini", settings.current_settings
-        )
         for conn_settings in settings.current_settings.get("custom_connections", []):
             name = conn_settings.get("name")
             if name:
@@ -744,78 +741,61 @@ class TranslationManager(QtCore.QObject):
 
         active_connection_name = settings.current_settings.get("active_connection_name")
         base_job_data: dict[str, Any] | None = None
-        if active_connection_name == "Google Gemini":
-            active_models: dict[str, str] = settings.current_settings.get(
-                "active_model_for_connection", {}
-            )
-            gemini_model_name = active_models.get(
-                "Google Gemini", settings.current_settings.get("gemini_model")
-            )
-            base_job_data = {
-                "provider": "gemini",
-                "connection_name": "Google Gemini",
-                "model_name": gemini_model_name,
-                "generation_params": settings.current_settings.get(
-                    "gemini_generation_params"
-                ),
-            }
-        
-        else:
-            custom_connections = cast(
-                list[CustomConnectionProfile],
-                settings.current_settings.get("custom_connections", []),
-            )
-            profile = next(
-                (
-                    c
-                    for c in custom_connections
-                    if c.get("name") == active_connection_name
-                ),
-                None,
-            )
-            if not profile:
+        custom_connections = cast(
+            list[CustomConnectionProfile],
+            settings.current_settings.get("custom_connections", []),
+        )
+        profile = next(
+            (
+                c
+                for c in custom_connections
+                if c.get("name") == active_connection_name
+            ),
+            None,
+        )
+        if not profile:
+            return cast(list[JobData], jobs)
+        active_model_id = settings.current_settings.get(
+            "active_model_for_connection", {}
+        ).get(active_connection_name)
+        model_config = next(
+            (
+                m
+                for m in profile.get("configured_models", [])
+                if m.get("model_id") == active_model_id
+            ),
+            None,
+        )
+        if not model_config:
+            if not profile.get("configured_models"):
                 return cast(list[JobData], jobs)
-            active_model_id = settings.current_settings.get(
-                "active_model_for_connection", {}
-            ).get(active_connection_name)
-            model_config = next(
-                (
-                    m
-                    for m in profile.get("configured_models", [])
-                    if m.get("model_id") == active_model_id
-                ),
-                None,
+            model_config = profile["configured_models"][0]
+        base_job_data = {
+            "provider": profile.get("provider"),
+            "connection_name": active_connection_name,
+            "model_name": model_config.get("model_id"),
+            "generation_params": model_config.get("generation_params", profile.get("generation_params")),
+            "thinking_config": model_config.get(
+                "thinking_config",
+                {"mode": "unknown", "enabled": True, "enable_cmd": "", "disable_cmd": ""},
+            ),
+            "timeout": profile.get("timeout", 600),
+        }
+        if profile.get("api_key"):
+            base_job_data["api_key"] = profile.get("api_key")
+        if profile.get("base_url"):
+            base_job_data["base_url"] = profile.get("base_url")
+        if profile.get("headers"):
+            base_job_data["headers"] = profile.get("headers")
+        if model_config.get("parsing_rules"):
+            base_job_data["parsing_rules"] = model_config.get("parsing_rules")
+        if model_config.get("additional_params"):
+            base_job_data["additional_params"] = model_config.get(
+                "additional_params"
             )
-            if not model_config:
-                if not profile.get("configured_models"):
-                    return cast(list[JobData], jobs)
-                model_config = profile["configured_models"][0]
-            base_job_data = {
-                "provider": profile.get("provider"),
-                "connection_name": active_connection_name,
-                "model_name": model_config.get("model_id"),
-                "generation_params": model_config.get("generation_params", profile.get("generation_params")),
-                "thinking_config": model_config.get(
-                    "thinking_config",
-                    {"mode": "unknown", "enabled": True, "enable_cmd": "", "disable_cmd": ""},
-                ),
-                "timeout": profile.get("timeout", 600),
-            }
-            if profile.get("api_key"):
-                base_job_data["api_key"] = profile.get("api_key")
-            if profile.get("base_url"):
-                base_job_data["base_url"] = profile.get("base_url")
-            if profile.get("headers"):
-                base_job_data["headers"] = profile.get("headers")
-            if model_config.get("parsing_rules"):
-                base_job_data["parsing_rules"] = model_config.get("parsing_rules")
-            if model_config.get("additional_params"):
-                base_job_data["additional_params"] = model_config.get(
-                    "additional_params"
-                )
-                logger.debug(
-                    f"Loaded additional_params for job: {base_job_data['additional_params']}"
-                )
+            logger.debug(
+                f"Loaded additional_params for job: {base_job_data['additional_params']}"
+            )
         if not (
             base_job_data
             and base_job_data.get("provider")

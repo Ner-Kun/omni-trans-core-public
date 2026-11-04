@@ -44,6 +44,7 @@ PROVIDER_API_BASES = {
     "ollama": "http://localhost:11434/v1",
     "lm_studio": "http://localhost:1234/v1",
     "nvidia_nim": "https://integrate.api.nvidia.com/v1/",
+    "gemini": "",
     "openai_compatible": "",
 }
 
@@ -55,6 +56,7 @@ PROVIDER_DISPLAY_NAMES = {
     "ollama": "Ollama",
     "lm_studio": "LM Studio",
     "nvidia_nim": "NVIDIA NIM",
+    "gemini": "Google Gemini",
     "openai_compatible": "OpenAI-Compatible",
 }
 
@@ -64,6 +66,7 @@ CLOUD_PROVIDERS = [
     "openrouter",
     "deepseek",
     "nvidia_nim",
+    "gemini",
     "openai_compatible",
 ]
 

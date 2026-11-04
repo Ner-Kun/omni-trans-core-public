@@ -1,121 +1,73 @@
-from PySide6.QtCore import Qt, Property, QRect
-from PySide6 import QtWidgets
-from PySide6.QtWidgets import QPushButton
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    FluentIcon,
+    InfoBadge,
+    InfoLevel,
+)
 
-class SmartButton(QPushButton):
-    STATE_NO_SELECTION = "no_selection"
-    STATE_NOT_INSTALLED = "not_installed"
-    STATE_INSTALLED = "installed"
-    STATE_BUSY = "busy"
-    STATE_CLOSING = "closing"
+from launcher.models.app_model import AppData
 
-    def __init__(self, parent=None):
+
+class AppListItem(QWidget):
+    """Compact row for the application list."""
+
+    def __init__(self, app: AppData, parent=None):
         super().__init__(parent)
-        self.setFixedSize(200, 50)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setObjectName("ActionButton")
-        self._current_state = self.STATE_NO_SELECTION
-        self.update_state(self.STATE_NO_SELECTION)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setStyleSheet("background: transparent;")
+        self.setMinimumHeight(58)
 
-    def update_state(self, state: str, text: str = None):
-        self._current_state = state
-        self.setEnabled(True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(12)
 
-        self.setProperty("state", state)
+        self.icon_label = QLabel(self)
+        self.icon_label.setFixedSize(36, 36)
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon = app.icon if not app.icon.isNull() else FluentIcon.APPLICATION.icon()
+        self.icon_label.setPixmap(icon.pixmap(QSize(32, 32)))
+        layout.addWidget(self.icon_label)
 
-        if state == self.STATE_NO_SELECTION:
-            self.setText("Select App")
-            self.setEnabled(False)
-        elif state == self.STATE_NOT_INSTALLED:
-            self.setText("DOWNLOAD")
-        elif state == self.STATE_INSTALLED:
-            self.setText("LAUNCH")
-        elif state == self.STATE_BUSY:
-            self.setText(text if text else "Working...")
-            self.setEnabled(False)
-        elif state == self.STATE_CLOSING:
-            self.setText(text if text else "Closing...")
-            self.setEnabled(False)
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
+        self.name_label = BodyLabel(app.name, self)
+        self.name_label.setStyleSheet("font-weight: 600;")
+        self.version_label = CaptionLabel(self._version_text(app), self)
+        text_layout.addWidget(self.name_label)
+        text_layout.addWidget(self.version_label)
+        layout.addLayout(text_layout, 1)
 
-        self.style().unpolish(self)
-        self.style().polish(self)
-        
-class AnimatedIconButton(QPushButton):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._icon_scale = 1.0
-        self._icon_rotation = 0.0
-        self._y_offset = 0.0
-        self._x_offset = 0.0
+        self.status_badge = InfoBadge.info("", self)
+        layout.addWidget(self.status_badge)
+        self.update_state(app)
 
-    def get_icon_scale(self):
-        return self._icon_scale
+    def update_state(self, app: AppData) -> None:
+        self.version_label.setText(self._version_text(app))
+        level, text = self._status(app)
+        self.status_badge.setLevel(level)
+        self.status_badge.setText(text)
 
-    def set_icon_scale(self, val):
-        self._icon_scale = val
-        self.update()
-    def get_icon_rotation(self):
-        return self._icon_rotation
+    @staticmethod
+    def _version_text(app: AppData) -> str:
+        if not app.is_local:
+            return f"v{app.latest_version} available"
+        if app.update_available:
+            return f"v{app.local_version} → v{app.latest_version}"
+        return f"v{app.local_version}"
 
-    def set_icon_rotation(self, val):
-        self._icon_rotation = val
-        self.update()
-
-    def get_y_offset(self):
-        return self._y_offset
-
-    def set_y_offset(self, val):
-        self._y_offset = val
-        self.update()
-
-    def get_x_offset(self):
-        return self._x_offset
-
-    def set_x_offset(self, val):
-        self._x_offset = val
-        self.update()
-
-    p_icon_scale = Property(float, get_icon_scale, set_icon_scale)
-    p_icon_rotation = Property(float, get_icon_rotation, set_icon_rotation)
-    p_y_offset = Property(float, get_y_offset, set_y_offset)
-    p_x_offset = Property(float, get_x_offset, set_x_offset)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
-
-        opt = QtWidgets.QStyleOptionButton()
-        self.initStyleOption(opt)
-
-        self.style().drawPrimitive(
-            QtWidgets.QStyle.PE_PanelButtonCommand, opt, painter, self
-        )
-        
-        if self.icon().isNull():
-            return
-
-        icon_size = self.iconSize()
-        rect = self.rect()
-
-        cx = rect.width() / 2
-        cy = rect.height() / 2
-
-        painter.save()
-
-        painter.translate(cx + self._x_offset, cy + self._y_offset)
-        painter.rotate(self._icon_rotation)
-        painter.scale(self._icon_scale, self._icon_scale)
-
-        pixmap = self.icon().pixmap(icon_size)
-
-        target_rect = QRect(
-            int(-icon_size.width() / 2),
-            int(-icon_size.height() / 2),
-            icon_size.width(),
-            icon_size.height(),
-        )
-        painter.drawPixmap(target_rect, pixmap)
-
-        painter.restore()
+    @staticmethod
+    def _status(app: AppData) -> tuple[InfoLevel, str]:
+        if app.is_running:
+            return InfoLevel.SUCCESS, "Running"
+        if app.is_launching:
+            return InfoLevel.INFOAMTION, "Launching"
+        if app.is_critical and app.update_available:
+            return InfoLevel.ERROR, "Critical"
+        if app.update_available:
+            return InfoLevel.WARNING, "Update"
+        if app.is_local:
+            return InfoLevel.SUCCESS, "Installed"
+        return InfoLevel.INFOAMTION, "Available"

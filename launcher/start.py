@@ -14,33 +14,58 @@ import urllib.request  # noqa: E402
 from launcher import config  # noqa: E402
 from launcher.utils.uv_manager import UvManager  # noqa: E402
 
+FALLBACK_REQUIREMENTS = """\
+PySide6==6.12.0
+PySide6-Fluent-Widgets[full]==1.11.3
+requests==2.34.2
+rich==15.0.0
+packaging==26.3
+"""
 
-def fetch_text(url):
+
+def fetch_text(url: str) -> str:
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Omni-Trans-Launcher"})
-        with urllib.request.urlopen(req, timeout=5) as response:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Omni-Trans-Launcher"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
             return response.read().decode("utf-8")
     except Exception:
         return ""
 
 
+def read_local(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def requirements_content() -> str:
+    if config.LOCAL_LAUNCHER_REQUIREMENTS.exists():
+        return read_local(config.LOCAL_LAUNCHER_REQUIREMENTS)
+    if config.LOCAL_CORE_REQUIREMENTS.exists():
+        return read_local(config.LOCAL_CORE_REQUIREMENTS)
+
+    remote = fetch_text(config.URL_LAUNCHER_REQ) + "\n" + fetch_text(
+        config.URL_CORE_REQ
+    )
+    return remote.strip() or FALLBACK_REQUIREMENTS
+
+
 def main():
     uv_man = UvManager()
 
-    uv_man.ensure_uv()
+    try:
+        uv_man.ensure_uv()
+    except Exception as error:
+        print(f"uv is unavailable ({error}); falling back to pip.")
+
     uv_man.ensure_venv()
 
-    req_launcher = fetch_text(config.URL_LAUNCHER_REQ)
-    req_core = fetch_text(config.URL_CORE_REQ)
-
     combined_req_path = config.TEMP_DIR / "startup_requirements.txt"
-
-    content = req_launcher + "\n" + req_core
-    if "rich" not in content:
-        content += "\nrich"
-
-    with open(combined_req_path, "w", encoding="utf-8") as f:
-        f.write(content)
+    combined_req_path.write_text(requirements_content(), encoding="utf-8")
 
     try:
         uv_man.install_requirements([combined_req_path])

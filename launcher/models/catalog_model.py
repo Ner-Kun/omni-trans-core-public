@@ -7,6 +7,7 @@ from launcher.models.app_model import AppData
 class CatalogModel(QObject):
     catalog_loaded = Signal(list)
     app_selected = Signal(AppData)
+    app_state_changed = Signal(object)
     core_version_updated = Signal(str)
     core_update_available = Signal(object)
     status_changed = Signal(str, str)

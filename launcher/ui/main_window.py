@@ -1,440 +1,298 @@
-import webbrowser
-
+from PySide6.QtCore import QTimer, Slot
 from PySide6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QHBoxLayout,
-    QVBoxLayout,
-    QListWidget,
-    QListWidgetItem,
-    QLabel,
-    QPushButton,
-    QMessageBox,
-    QTextBrowser,
+    QApplication,
+    QDialog,
+    QMenu,
+    QSystemTrayIcon,
 )
-from PySide6.QtCore import Qt, QTimer, QSize, QLocale, QTimeZone, Slot
-from rich.console import Console
+from qfluentwidgets import (
+    FluentIcon,
+    InfoBar,
+    InfoBarPosition,
+    MessageBox,
+    MSFluentWindow,
+    NavigationItemPosition,
+)
 
 from launcher import config
-from launcher.ui.widgets import SmartButton, AnimatedIconButton
-from launcher.ui.dialogs import DonationDialog, CriticalUpdateDialog
+from launcher.controllers.catalog_controller import CatalogController
 from launcher.models.app_model import AppData
 from launcher.models.catalog_model import CatalogModel
-from launcher.controllers.catalog_controller import CatalogController
-from launcher.utils.icon_manager import IconManager
-from launcher.utils.animations import DonateAnimator
+from launcher.ui.dialogs import DonationDialog
+from launcher.ui.pages.about_page import AboutPage
+from launcher.ui.pages.apps_page import AppsPage
+from launcher.ui.pages.settings_page import SettingsPage
+from launcher.utils.links import detect_donate_link
+from launcher.utils.settings import LauncherSettings
 
 
-class MainWindow(QMainWindow):
-
+class LauncherWindow(MSFluentWindow):
     def __init__(self):
         super().__init__()
-        self.console = Console()
-        self.console.log("Starting Main Window...")
+        self.setWindowTitle(f"{config.APP_NAME} {config.LAUNCHER_VERSION}")
+        self.resize(config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
+        self.setMinimumSize(900, 600)
+        self.setWindowIcon(FluentIcon.APPLICATION.icon())
+        self.setStyleSheet("LauncherWindow { background-color: #1a1a1e; }")
 
-        self.setWindowTitle(f"Omni Trans Launcher - v{config.LAUNCHER_VERSION}")
-        self.resize(980, 700)
+        self.settings = LauncherSettings()
+        self._force_quit = False
 
-        # MVC
         self.model = CatalogModel(self)
         self.controller = CatalogController(self.model, self)
 
-        # Donate URL detection
-        self.donate_url, self.donate_tooltip = self._detect_donate_url()
-        self.current_github_url = config.SOCIAL_CONFIG["github"]["link"]
+        self.donate_url, self.donate_tooltip = detect_donate_link()
+        self._launcher_update_prompted = False
 
-        # Build UI
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        self.main_layout = QHBoxLayout(self.central_widget)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.setSpacing(0)
+        self.apps_page = AppsPage(
+            self.model,
+            self.controller,
+            self.donate_url,
+            self.donate_tooltip,
+            remembered_app=(
+                self.settings.last_selected_app
+                if self.settings.remember_last_app
+                else ""
+            ),
+            parent=self,
+        )
+        self.settings_page = SettingsPage(self.settings, self)
+        self.about_page = AboutPage(self)
 
-        self._setup_sidebar()
-        self._setup_content_area()
-
-        # Donate animation
-        self.app_manager = self.controller.app_manager
-        self.app_manager.save_donate_link_preference(self.donate_url)
-        self.animator = DonateAnimator(self.btn_donate)
-        self.animator.start()
-
-        # Connect model signals to view slots
-        self._connect_model_signals()
-
-        QTimer.singleShot(100, self.controller.load_catalog)
-        QTimer.singleShot(200, self.load_icons)
-
-    def _detect_donate_url(self) -> tuple[str, str]:
-        sys_locale = QLocale.system()
-        is_cis_locale = (
-            sys_locale.language() in [QLocale.Ukrainian, QLocale.Russian]
-        ) or (
-            sys_locale.country() in [QLocale.Ukraine, QLocale.Russia, QLocale.Belarus]
+        self.addSubInterface(
+            self.apps_page,
+            FluentIcon.APPLICATION,
+            "Applications",
+        )
+        self.addSubInterface(
+            self.settings_page,
+            FluentIcon.SETTING,
+            "Settings",
+            position=NavigationItemPosition.BOTTOM,
+        )
+        self.addSubInterface(
+            self.about_page,
+            FluentIcon.INFO,
+            "About",
+            position=NavigationItemPosition.BOTTOM,
         )
 
-        tz_id = QTimeZone.systemTimeZoneId().data().decode("utf-8", errors="ignore")
-        tz_markers = ["Kiev", "Kyiv", "Ukraine", "Moscow", "Minsk", "FLE", "GTB"]
-        is_cis_timezone = any(marker in tz_id for marker in tz_markers)
+        self._tray_icon = QSystemTrayIcon(FluentIcon.APPLICATION.icon(), self)
+        self._tray_icon.setToolTip(config.APP_NAME)
+        tray_menu = QMenu(self)
+        tray_menu.addAction("Show launcher").triggered.connect(
+            self._restore_from_tray
+        )
+        tray_menu.addAction("Quit").triggered.connect(self._quit_from_tray)
+        self._tray_icon.setContextMenu(tray_menu)
+        self._tray_icon.activated.connect(self._on_tray_activated)
+        self._update_tray_icon()
 
-        donate_cfg = config.SOCIAL_CONFIG["donate"]
-
-        if is_cis_locale or is_cis_timezone:
-            self.console.log("UA/CIS -> Donatik")
-            return donate_cfg["link_ua"], "Підтримати розробку"
-        else:
-            self.console.log("Global -> Patreon")
-            return donate_cfg["link_global"], "Support Development"
-
-    def _setup_sidebar(self):
-        container = QWidget()
-        container.setObjectName("Sidebar")
-        container.setFixedWidth(300)
-
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(10, 20, 10, 10)
-
-        header = QLabel("AVAILABLE APPS")
-        header.setObjectName("SidebarHeader")
-        header.setAlignment(Qt.AlignCenter)
-        layout.addWidget(header)
-
-        self.apps_list = QListWidget()
-        self.apps_list.setIconSize(QSize(32, 32))
-        self.apps_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.apps_list.currentItemChanged.connect(self._on_app_selected)
-        layout.addWidget(self.apps_list)
-
-        self.refresh_btn = QPushButton("↻ Refresh Catalog")
-        self.refresh_btn.setObjectName("RefreshBtn")
-        self.refresh_btn.setCursor(Qt.PointingHandCursor)
-        self.refresh_btn.clicked.connect(self.controller.force_refresh_catalog)
-        layout.addWidget(self.refresh_btn)
-
-        self.main_layout.addWidget(container)
-
-    def _setup_content_area(self):
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(15)
-
-        top_bar = self._setup_top_bar()
-        layout.addLayout(top_bar)
-
-        self.app_title = QLabel("Select an Application")
-        self.app_title.setObjectName("AppTitle")
-        self.app_title.setWordWrap(True)
-        self.app_title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.app_title)
-
-        self.app_desc = QLabel("Choose an application from the list.")
-        self.app_desc.setObjectName("AppDescription")
-        self.app_desc.setWordWrap(True)
-        self.app_desc.setAlignment(Qt.AlignTop)
-        layout.addWidget(self.app_desc)
-
-        self.changes_label = QLabel("WHAT'S NEW")
-        self.changes_label.setObjectName("ChangesHeader")
-        self.changes_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.changes_label)
-
-        self.changelog_viewer = QTextBrowser()
-        self.changelog_viewer.setObjectName("ChangelogViewer")
-        self.changelog_viewer.setOpenExternalLinks(True)
-        layout.addWidget(self.changelog_viewer)
-
-        action_area = self._setup_action_area()
-        layout.addLayout(action_area)
-
-        self.main_layout.addWidget(container)
-
-    def _setup_top_bar(self) -> QHBoxLayout:
-        top_bar = QHBoxLayout()
-
-        # Telegram
-        self.btn_telegram = QPushButton()
-        self.btn_telegram.setObjectName("SocialButton")
-        self.btn_telegram.setToolTip("Join Telegram Channel")
-        self.btn_telegram.setCursor(Qt.PointingHandCursor)
-        self.btn_telegram.setFixedSize(32, 32)
-        tg_url = config.SOCIAL_CONFIG["telegram"]["link"]
-        self.btn_telegram.clicked.connect(lambda: webbrowser.open(tg_url))
-        top_bar.addWidget(self.btn_telegram)
-
-        # Donate
-        self.btn_donate = AnimatedIconButton()
-        self.btn_donate.setObjectName("SocialButton")
-        self.btn_donate.setToolTip(self.donate_tooltip)
-        self.btn_donate.setCursor(Qt.PointingHandCursor)
-        self.btn_donate.setFixedSize(32, 32)
-        self.btn_donate.clicked.connect(lambda: webbrowser.open(self.donate_url))
-        top_bar.addWidget(self.btn_donate)
-
-        # GitHub
-        self.btn_github = QPushButton()
-        self.btn_github.setObjectName("SocialButton")
-        self.btn_github.setToolTip("Open Source Repository")
-        self.btn_github.setCursor(Qt.PointingHandCursor)
-        self.btn_github.setFixedSize(32, 32)
-        self.btn_github.clicked.connect(self._open_github)
-        top_bar.addWidget(self.btn_github)
-
-        top_bar.addStretch()
-
-        # Core update button
-        self.core_update_btn = QPushButton("Update Core ⬇")
-        self.core_update_btn.setObjectName("CoreUpdateBtn")
-        self.core_update_btn.setCursor(Qt.PointingHandCursor)
-        self.core_update_btn.setVisible(False)
-        self.core_update_btn.clicked.connect(self._on_core_update_clicked)
-        top_bar.addWidget(self.core_update_btn)
-
-        # Version labels
-        version_container = QWidget()
-        version_layout = QVBoxLayout(version_container)
-        version_layout.setContentsMargins(10, 0, 0, 0)
-        version_layout.setSpacing(2)
-
-        self.core_version_label = QLabel("Core: Checking...")
-        self.core_version_label.setObjectName("CoreVersionLabel")
-        self.core_version_label.setAlignment(Qt.AlignRight)
-        version_layout.addWidget(self.core_version_label)
-
-        self.app_version_label = QLabel("App: -")
-        self.app_version_label.setObjectName("AppVersionLabel")
-        self.app_version_label.setAlignment(Qt.AlignRight)
-        version_layout.addWidget(self.app_version_label)
-
-        top_bar.addWidget(version_container)
-        return top_bar
-
-    def _setup_action_area(self) -> QHBoxLayout:
-        action_area = QHBoxLayout()
-
-        self.status_label = QLabel("")
-        self.status_label.setObjectName("StatusLabel")
-        action_area.addWidget(self.status_label)
-        action_area.addStretch()
-
-        self.update_btn = QPushButton("Update")
-        self.update_btn.setObjectName("UpdateBtn")
-        self.update_btn.setFixedSize(120, 50)
-        self.update_btn.setCursor(Qt.PointingHandCursor)
-        self.update_btn.setVisible(False)
-        self.update_btn.clicked.connect(self.controller.start_installation)
-        action_area.addWidget(self.update_btn)
-        action_area.addSpacing(10)
-
-        self.action_btn = SmartButton()
-        self.action_btn.clicked.connect(self._on_action_clicked)
-        action_area.addWidget(self.action_btn)
-
-        return action_area
-
-    def _connect_model_signals(self):
+        self.controller.launch_started.connect(self._on_launch_started)
+        self.controller.app_window_ready.connect(self._on_app_window_ready)
+        self.controller.app_window_timeout.connect(self._on_app_window_timeout)
+        self.controller.app_launch_failed.connect(self._on_app_launch_failed)
+        self.controller.launcher_update_started.connect(
+            self._on_launcher_update_started
+        )
+        self.controller.nag_required.connect(self._on_nag_required)
         self.model.catalog_loaded.connect(self._on_catalog_loaded)
-        self.model.app_selected.connect(self._on_app_data_selected)
-        self.model.core_version_updated.connect(self._on_core_version_updated)
-        self.model.core_update_available.connect(self._on_core_update_available)
-        self.model.status_changed.connect(self._on_status_changed)
-        self.model.error_occurred.connect(self._on_model_error)
+        self.model.app_selected.connect(self._on_app_selected)
+        self.settings_page.tray_setting_changed.connect(self._update_tray_icon)
+
+        self.controller.app_manager.save_donate_link_preference(self.donate_url)
+
+        self._state_timer = QTimer(self)
+        self._state_timer.setInterval(3000)
+        self._state_timer.timeout.connect(self.controller.refresh_running_states)
+        self._state_timer.start()
+
+        QTimer.singleShot(
+            100,
+            lambda: self.controller.load_catalog(
+                check_updates=self.settings.check_updates_on_startup
+            ),
+        )
+        QTimer.singleShot(600, self._check_launcher_nag)
 
     @Slot(list)
-    def _on_catalog_loaded(self, apps: list[AppData]):
-        self.apps_list.clear()
-        for app in apps:
-            item = QListWidgetItem(app.name)
-            item.setIcon(app.icon)
-            item.setData(Qt.UserRole, app)
-            self.apps_list.addItem(item)
+    def _on_catalog_loaded(self, _apps) -> None:
+        if not self.controller.last_updates_checked:
+            return
 
-        if self.apps_list.count() > 0:
-            self.apps_list.setCurrentRow(0)
+        if self._launcher_update_prompted:
+            return
 
-        launcher_update = self.app_manager.get_launcher_update_info()
-        if launcher_update:
-            new_ver = launcher_update.get("pending_update_version")
-            self.console.log(f"Launcher update found: {new_ver}")
+        info = self.controller.app_manager.get_launcher_update_info()
+        if not info:
+            return
 
-            reply = QMessageBox.question(
-                self,
-                "Launcher Update Available",
-                f"A new version of Launcher (v{new_ver}) is available.\nUpdate and restart now?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
+        self._launcher_update_prompted = True
+        new_version = info.get("pending_update_version", "?")
 
-            if reply == QMessageBox.Yes:
-                self._set_ui_interactivity(False)
-                self.app_manager.update_launcher(launcher_update)
-                return
+        box = MessageBox(
+            "Launcher update",
+            f"A new version (v{new_version}) is available.\n"
+            "Update and restart now?",
+            self,
+        )
+        box.yesButton.setText("Update")
+        box.cancelButton.setText("Later")
 
-        QTimer.singleShot(500, self._check_launcher_nag)
+        if box.exec() == QDialog.DialogCode.Accepted:
+            self.controller.update_launcher(info)
 
     @Slot(AppData)
-    def _on_app_data_selected(self, app: AppData):
-        if app.repo_url:
-            self.current_github_url = app.repo_url
-            self.btn_github.setToolTip(f"Open Repository: {app.name}")
-            self.btn_github.setEnabled(True)
-            self.btn_github.setProperty("has_link", True)
-        else:
-            self.current_github_url = config.SOCIAL_CONFIG["github"]["link"]
-            self.btn_github.setToolTip("Open Launcher Repository")
+    def _on_app_selected(self, app: AppData) -> None:
+        if self.settings.remember_last_app:
+            if self.settings.last_selected_app != app.folder_name:
+                self.settings.last_selected_app = app.folder_name
+                self.settings.save()
+        elif self.settings.last_selected_app:
+            self.settings.last_selected_app = ""
+            self.settings.save()
 
-        self.console.log(f"Selected: {app.name}")
-
-        self.app_title.setText(app.name)
-        self.app_desc.setText(app.description or "No description provided.")
-
-        if not app.is_local:
-            ver_text = f"App: v{app.latest_version} (Available)"
-            self.app_version_label.setProperty("state", "not_installed")
-        elif app.update_available:
-            ver_text = f"App: v{app.local_version} ➜ v{app.latest_version}"
-            self.app_version_label.setProperty("state", "update")
-        else:
-            ver_text = f"App: v{app.local_version}"
-            self.app_version_label.setProperty("state", "normal")
-
-        self.app_version_label.setText(ver_text)
-        self.app_version_label.style().unpolish(self.app_version_label)
-        self.app_version_label.style().polish(self.app_version_label)
-
-        if app.changelog:
-            self.changelog_viewer.setMarkdown(app.changelog)
-        else:
-            self.changelog_viewer.setMarkdown("*No release notes available.*")
-
-        self._refresh_button_state()
-
-    @Slot(str)
-    def _on_core_version_updated(self, version: str):
-        self.core_version_label.setText(f"Core: {version}")
-
-    @Slot(object)
-    def _on_core_update_available(self, update_info):
-        self.core_update_btn.setVisible(True)
-        self.core_version_label.setProperty("has_update", True)
-        self.core_version_label.style().unpolish(self.core_version_label)
-        self.core_version_label.style().polish(self.core_version_label)
-        self.core_version_label.setText(
-            f"Core: {update_info.local_version} → {update_info.remote_version}"
-        )
-        self.core_update_btn.setToolTip(update_info.changelog)
-        self.console.log("Core update available displayed.")
-
-    @Slot(str, str)
-    def _on_status_changed(self, message: str, style: str):
-        self.console.print(message, style=style)
-        self.status_label.setText(message)
-
-    @Slot(str)
-    def _on_model_error(self, message: str):
-        QMessageBox.critical(self, "Error", f"An error occurred:\n\n{message}")
-        self._set_ui_interactivity(True)
-        self._refresh_button_state()
-
-    @Slot()
-    def _on_app_selected(self, current, previous):
-        if not current:
-            return
-        app = current.data(Qt.UserRole)
-        if isinstance(app, AppData):
-            self.controller.select_app(app)
-
-    @Slot()
-    def _on_action_clicked(self):
-        app = self.model.selected_app
-        if not app:
-            return
-
-        state = self.action_btn._current_state
-        self.console.log(f"Main action button clicked. State: {state}")
-
-        if state == SmartButton.STATE_NOT_INSTALLED:
-            self.controller.start_installation()
-        elif state == SmartButton.STATE_INSTALLED:
-            self._handle_launch_with_critical_check(app)
-
-    def _handle_launch_with_critical_check(self, app: AppData):
-        if app.is_critical and app.update_available:
-            dlg = CriticalUpdateDialog(self, app.name, app.local_version, app.latest_version)
-            dlg.exec()
-
-            action = dlg.result_action
-            if action == "cancel":
-                self.console.log("Launch cancelled by user (Critical Update Dialog).")
-                return
-            elif action == "update":
-                self.console.log("User chose to update from critical dialog.")
-                self.controller.start_installation()
-                return
-            elif action == "launch":
-                self.console.log("User chose 'Launch Anyway'. Proceeding with risk.")
-
-        self.controller.start_launch_sequence(app.folder_name)
-
-    @Slot()
-    def _on_core_update_clicked(self):
-        self.console.log("Core update button clicked.")
-        self._set_ui_interactivity(False)
-        self.core_update_btn.setEnabled(False)
-        self.core_update_btn.setText("Updating...")
-        self.controller.update_core()
-
-    def _refresh_button_state(self):
-        app = self.model.selected_app
-
-        if not app:
-            self.action_btn.update_state(SmartButton.STATE_NO_SELECTION)
-            self.update_btn.setVisible(False)
-            return
-
-        self.update_btn.setVisible(app.is_local and app.update_available)
-
-        if app.update_available:
-            self.update_btn.setProperty("critical", app.is_critical)
-            self.update_btn.style().unpolish(self.update_btn)
-            self.update_btn.style().polish(self.update_btn)
-
-        if app.is_local:
-            self.action_btn.update_state(SmartButton.STATE_INSTALLED)
-            self.action_btn.setProperty("critical", app.update_available and app.is_critical)
-            self.action_btn.style().unpolish(self.action_btn)
-            self.action_btn.style().polish(self.action_btn)
-
-            if app.update_available and app.is_critical:
-                self.action_btn.setText("LAUNCH (RISK)")
-        else:
-            self.action_btn.update_state(SmartButton.STATE_NOT_INSTALLED)
-
-    def _check_launcher_nag(self):
-        show, count = self.app_manager.register_launch_and_check_nag(
+    def _check_launcher_nag(self) -> None:
+        show, count = self.controller.app_manager.register_launch_and_check_nag(
             "launcher", is_launcher=True
         )
         if show:
-            self.console.log(f"Showing launcher donation dialog (Count: {count})")
-            dlg = DonationDialog(self, "Omni Trans Launcher", count, self.donate_url)
-            dlg.exec()
+            DonationDialog(self, config.APP_NAME, count, self.donate_url).exec()
 
-    def _set_ui_interactivity(self, enabled: bool):
-        self.apps_list.setEnabled(enabled)
-        self.refresh_btn.setEnabled(enabled)
-        self.core_update_btn.setEnabled(enabled)
+    @Slot(str, int)
+    def _on_nag_required(self, app_name: str, count: int) -> None:
+        DonationDialog(self, app_name, count, self.donate_url).exec()
+
+    @Slot(str)
+    def _on_launch_started(self, app_name: str) -> None:
+        InfoBar.info(
+            "Launching",
+            app_name,
+            duration=3000,
+            position=InfoBarPosition.TOP_RIGHT,
+            parent=self,
+        )
+
+    @Slot(str)
+    def _on_app_window_ready(self, folder_name: str) -> None:
+        app_name = self.controller.app_manager.get_app_entry(folder_name).get(
+            "name", folder_name
+        )
+
+        if self.settings.close_after_launch:
+            if self.settings.minimize_to_tray and self._tray_icon.isVisible():
+                self._hide_to_tray()
+            else:
+                self._quit_application()
+            return
+
+        InfoBar.success(
+            "Running",
+            f"{app_name} is ready.",
+            duration=3000,
+            position=InfoBarPosition.TOP_RIGHT,
+            parent=self,
+        )
+        self.controller.refresh_running_states()
+
+    @Slot(str)
+    def _on_app_window_timeout(self, folder_name: str) -> None:
+        app_name = self.controller.app_manager.get_app_entry(folder_name).get(
+            "name", folder_name
+        )
+        InfoBar.warning(
+            "Still starting",
+            f"{app_name} has not opened its window yet.",
+            duration=5000,
+            position=InfoBarPosition.TOP_RIGHT,
+            parent=self,
+        )
+
+    @Slot(str, str)
+    def _on_app_launch_failed(self, folder_name: str, message: str) -> None:
+        box = MessageBox("Launch failed", message, self)
+        box.hideCancelButton()
+        box.yesButton.setText("OK")
+        box.exec()
 
     @Slot()
-    def _open_github(self):
-        webbrowser.open(self.current_github_url)
+    def _on_launcher_update_started(self) -> None:
+        self._quit_application()
 
-    def load_icons(self):
-        """Load social icons."""
-        for name, btn in [
-            ("telegram", self.btn_telegram),
-            ("donate", self.btn_donate),
-            ("github", self.btn_github),
-        ]:
-            icon = IconManager.get_qicon(name)
-            if not icon.isNull():
-                btn.setIcon(icon)
-                btn.setIconSize(QSize(24, 24))
+    def _update_tray_icon(self, enabled: bool | None = None) -> None:
+        if enabled is None:
+            enabled = self.settings.minimize_to_tray
+
+        if enabled and QSystemTrayIcon.isSystemTrayAvailable():
+            self._tray_icon.show()
+        else:
+            self._tray_icon.hide()
+
+    def _hide_to_tray(self) -> None:
+        self.hide()
+        if self._tray_icon.isVisible():
+            self._tray_icon.showMessage(
+                config.APP_NAME,
+                "Still running in the tray.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+
+    @Slot()
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    @Slot(object)
+    def _on_tray_activated(
+        self, reason: QSystemTrayIcon.ActivationReason
+    ) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._restore_from_tray()
+
+    @Slot()
+    def _quit_from_tray(self) -> None:
+        self._force_quit = True
+        if self.controller.is_busy():
+            self._restore_from_tray()
+            self.close()
+        else:
+            self._quit_application()
+
+    def _quit_application(self) -> None:
+        self._state_timer.stop()
+        self.apps_page.stop_animations()
+        self._tray_icon.hide()
+        QApplication.quit()
+
+    def closeEvent(self, event):
+        if (
+            self.settings.minimize_to_tray
+            and not self._force_quit
+            and self._tray_icon.isVisible()
+        ):
+            self._hide_to_tray()
+            event.ignore()
+            return
+
+        if self.controller.is_busy():
+            box = MessageBox(
+                "Operation in progress",
+                "An install or update is running. Quit anyway?",
+                self,
+            )
+            box.yesButton.setText("Quit")
+            box.cancelButton.setText("Stay")
+            if box.exec() != QDialog.DialogCode.Accepted:
+                self._force_quit = False
+                event.ignore()
+                return
+
+        self._state_timer.stop()
+        self.apps_page.stop_animations()
+        self._tray_icon.hide()
+        super().closeEvent(event)
