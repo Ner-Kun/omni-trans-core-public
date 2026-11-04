@@ -41,7 +41,6 @@ def _fix_spin_box_editor(spin: SpinBox) -> None:
     )
 
 
-
 @auto_register(
     # Enable proxy switch
     ("proxy_enabled_check", "text", "dialog.settings.proxy.enabled_check"),
@@ -261,7 +260,6 @@ class ProxyTabWidget(QtWidgets.QWidget):
             del_btn = TransparentToolButton(FluentIcon.DELETE, actions_widget)
             del_btn.setFixedSize(28, 28)
             del_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-            del_btn.setToolTip(translate("dialog.settings.proxy.header_actions"))
             del_btn.clicked.connect(lambda _, r=row: self._remove_custom_proxy(r))
 
             actions_layout.addWidget(del_btn)
