@@ -43,6 +43,10 @@ class ModelInspectorDialog(Dialog):
         """
         self.titleBar.show()
         self.titleBar.raise_()
+        self.windowTitleLabel.setFixedHeight(self.titleBar.height())
+        self.windowTitleLabel.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
         self.windowTitleLabel.setContentsMargins(16, 0, 0, 0)
         # The stock title bar button glyph is black and disappears on the dark
         # dialog background, so paint it with the theme's foreground color.

@@ -9,7 +9,6 @@ from qfluentwidgets import (
     MessageBox,
     PrimaryPushButton,
     PushButton,
-    SmoothScrollArea,
     SpinBox,
     StrongBodyLabel,
     SwitchButton,
@@ -65,27 +64,12 @@ class ProxyTabWidget(QtWidgets.QWidget):
 
     def _setup_ui(self):
         """Create all UI elements."""
-        root_layout = QtWidgets.QVBoxLayout(self)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
-
-        scroll_area = SmoothScrollArea(self)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        scroll_area.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        root_layout.addWidget(scroll_area)
-
-        content = QtWidgets.QWidget()
-        scroll_area.setWidget(content)
-
-        main_layout = QtWidgets.QVBoxLayout(content)
+        main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(8)
 
         # --- Custom proxies card ---
-        self.custom_proxy_group = CardWidget(content)
+        self.custom_proxy_group = CardWidget(self)
         custom_layout = QtWidgets.QVBoxLayout(self.custom_proxy_group)
         custom_layout.setContentsMargins(16, 10, 16, 10)
         custom_layout.setSpacing(6)
@@ -133,7 +117,7 @@ class ProxyTabWidget(QtWidgets.QWidget):
         main_layout.addWidget(self.custom_proxy_group, 1)
 
         # --- Add proxy card ---
-        self.add_proxy_group = CardWidget(content)
+        self.add_proxy_group = CardWidget(self)
         add_layout = QtWidgets.QGridLayout(self.add_proxy_group)
         add_layout.setContentsMargins(16, 10, 16, 10)
         add_layout.setHorizontalSpacing(10)

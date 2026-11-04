@@ -237,7 +237,6 @@ class ProviderConfigDialog(Dialog):
         global_limits_grid.addWidget(self.global_tpm_edit, 2, 1)
         global_limits_grid.setColumnStretch(1, 1)
         self.wait_for_response_check = CheckBox()
-        self.wait_for_response_check.setChecked(True)
         global_limits_layout.addLayout(global_limits_grid)
         global_limits_layout.addWidget(self.wait_for_response_check)
         global_limits_layout.addStretch(1)
@@ -292,8 +291,9 @@ class ProviderConfigDialog(Dialog):
         self.model_id_editor_label = BodyLabel()
         form_layout.addRow(self.model_id_editor_label, self.model_id_edit)
         self.available_models_combo = ComboBox()
+        # Длинные id моделей не должны раздувать минимальную ширину диалога.
         self.available_models_combo.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
         self.available_models_label = BodyLabel()
@@ -371,10 +371,12 @@ class ProviderConfigDialog(Dialog):
         self.disable_cmd_label = BodyLabel()
         commands_row.addWidget(self.enable_cmd_label)
         commands_row.addWidget(self.enable_cmd_edit, 1)
-        commands_row.addSpacing(PROVIDER_GROUP_SPACING)
-        commands_row.addWidget(self.disable_cmd_label)
-        commands_row.addWidget(self.disable_cmd_edit, 1)
         thinking_commands_layout.addLayout(commands_row)
+        disable_cmd_row = QtWidgets.QHBoxLayout()
+        disable_cmd_row.setContentsMargins(0, 0, 0, 0)
+        disable_cmd_row.addWidget(self.disable_cmd_label)
+        disable_cmd_row.addWidget(self.disable_cmd_edit, 1)
+        thinking_commands_layout.addLayout(disable_cmd_row)
         self.thinking_commands_group.setVisible(False)
         editor_layout.addWidget(self.thinking_commands_group)
 
