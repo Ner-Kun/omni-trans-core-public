@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime data and secrets
+settings/
+_archive/
+*.log
+translator.log
+crash_logs/
+
+# Launcher runtime
+launcher/temp/
+launcher/tool/uv/
+launcher/tool/.uv_cache/
+launcher/data/installed_apps.json
+
+# Translator apps are separate repositories
+lgt_app/
+*_app/
+
+# Generated bundles / archives
+*.zip
+omni_trans_core.txt
+gptree_output.txt
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.roo/
+.rooignore
+.VSCodeCounter/
