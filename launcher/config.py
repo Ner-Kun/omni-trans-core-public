@@ -28,7 +28,7 @@ else:
     VENV_PYTHON = VENV_DIR / "bin" / "python"
 
 APP_NAME = "Omni Trans Launcher"
-LAUNCHER_VERSION = "1.1.0"
+LAUNCHER_VERSION = "1.2.0"
 
 # Dev mode keeps the launcher on local requirements and a local manifest
 # instead of pulling release data from GitHub.
@@ -38,7 +38,7 @@ LOCAL_LAUNCHER_REQUIREMENTS = LAUNCHER_DIR / "requirements.txt"
 LOCAL_CORE_REQUIREMENTS = ROOT_DIR / "requirements.txt"
 
 _DEFAULT_MANIFEST_URL = (
-    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-launcher/main/manifest.json"
+    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-core-public/main/manifest.json"
 )
 MANIFEST_URL = os.environ.get("OMNI_LAUNCHER_MANIFEST_URL", "").strip() or (
     str(LOCAL_MANIFEST)
@@ -46,10 +46,10 @@ MANIFEST_URL = os.environ.get("OMNI_LAUNCHER_MANIFEST_URL", "").strip() or (
     else _DEFAULT_MANIFEST_URL
 )
 URL_LAUNCHER_REQ = (
-    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-launcher/refs/heads/main/requirements.txt"
+    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-core-public/refs/heads/main/launcher/requirements.txt"
 )
 URL_CORE_REQ = (
-    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-core/refs/heads/main/requirements.txt"
+    "https://raw.githubusercontent.com/Ner-Kun/omni-trans-core-public/refs/heads/main/requirements.txt"
 )
 UV_DOWNLOAD_URL = (
     "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
@@ -65,7 +65,7 @@ SOCIAL_CONFIG = {
         "icon_ext": ".svg",
     },
     "github": {
-        "link": "https://github.com/Ner-Kun/omni-trans-launcher",
+        "link": "https://github.com/Ner-Kun/omni-trans-core-public",
         "icon_url": "https://cdn.simpleicons.org/github/e0e0e0",
         "icon_ext": ".svg",
     },

@@ -1,4 +1,4 @@
-CORE_VERSION = "v1.1.0"
+CORE_VERSION = "v1.2.0"
 
 # Animations: Durations (millisecond)
 DEFAULT_VISIBILITY_TOGGLE_DURATION_MS = 200

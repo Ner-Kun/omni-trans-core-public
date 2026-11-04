@@ -1,0 +1,42 @@
+{
+    "core": {
+        "id": "omni_trans_core",
+        "name": "Omni Trans Core",
+        "description": "Shared core: providers, queue, cache, Fluent UI.",
+        "version": "1.2.0",
+        "repo_url": "https://github.com/Ner-Kun/omni-trans-core-public",
+        "archive_name": "omni_trans_core.zip",
+        "branch": "main",
+        "min_core_version": "1.2.0",
+        "critical": false,
+        "changelog": "Fluent UI, Gemini through litellm, multi-key rotation, per-app prompt profiles and atomic settings."
+    },
+    "launcher": {
+        "id": "launcher",
+        "name": "Omni Trans Launcher",
+        "description": "Fluent launcher with safe install and running state.",
+        "version": "1.2.0",
+        "repo_url": "https://github.com/Ner-Kun/omni-trans-core-public",
+        "archive_name": "omni-trans-launcher.zip",
+        "branch": "main",
+        "min_core_version": "1.2.0",
+        "critical": false,
+        "changelog": "Fluent launcher, safe install with rollback, running state, tray and settings."
+    },
+    "apps": [
+        {
+            "id": "lgt_app",
+            "name": "Lorebook Gemini Translator",
+            "description": "Lorebook translator with a Fluent editor, translation queue and local cache.",
+            "folder_name": "lgt_app",
+            "version": "0.4.0",
+            "repo_url": "https://github.com/Ner-Kun/lorebook-gemini-translator-public",
+            "archive_name": "lgt_app.zip",
+            "branch": "main",
+            "min_core_version": "1.2.0",
+            "exe_path": "runner.py",
+            "critical": false,
+            "changelog": "Fluent UI, litellm connection, two-target donation and per-app prompt profiles."
+        }
+    ]
+}

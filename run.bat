@@ -8,7 +8,7 @@ if exist "launcher\start.py" goto :LAUNCH
 echo [INFO] Launcher files not found. Starting installation...
 echo [INFO] Downloading latest release from GitHub...
 
-curl -L -o omni-trans-launcher.zip "https://github.com/Ner-Kun/omni-trans-launcher/releases/latest/download/omni-trans-launcher.zip"
+curl -L -o omni-trans-launcher.zip "https://github.com/Ner-Kun/omni-trans-core-public/releases/latest/download/omni-trans-launcher.zip"
 
 if %errorlevel% neq 0 (
     echo [ERROR] Failed to download launcher. Please check your internet connection.

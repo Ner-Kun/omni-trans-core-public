@@ -29,6 +29,7 @@ lgt_app/
 
 # Generated bundles / archives
 *.zip
+dist/
 omni_trans_core.txt
 gptree_output.txt
 
