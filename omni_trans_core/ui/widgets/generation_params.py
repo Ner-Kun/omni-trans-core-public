@@ -15,6 +15,7 @@ from qfluentwidgets import (
 from ... import settings
 from ...localization_manager import auto_register, loc_man, translate
 from ..animations import UIAnimator
+from ..base_widgets import fix_spin_box_editor
 
 logger = logging.getLogger("CORE_UI.widgets")
 
@@ -191,6 +192,7 @@ class GenerationParamsWidget(CardWidget):
             self.freq_penalty_spin,
             self.pres_penalty_spin,
         ):
+            fix_spin_box_editor(spinbox)
             spinbox.setMinimumWidth(GEN_PARAMS_SPINBOX_MIN_WIDTH)
             spinbox.setMaximumWidth(GEN_PARAMS_SPINBOX_MAX_WIDTH)
         self.level_combo.setMinimumWidth(GEN_PARAMS_COMBO_MIN_WIDTH)

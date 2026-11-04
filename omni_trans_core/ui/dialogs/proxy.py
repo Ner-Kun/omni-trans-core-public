@@ -19,26 +19,11 @@ from qfluentwidgets import (
 from ... import settings
 from ...localization_manager import translate, auto_register
 from ...proxy_manager import proxy_manager
+from ..base_widgets import fix_spin_box_editor
 
 
 PROXY_PROTOCOLS = ("HTTP", "HTTPS", "SOCKS5")
 PROXY_TABLE_COLUMNS = 5
-
-
-def _fix_spin_box_editor(spin: SpinBox) -> None:
-    """Keep the Fluent SpinBox value visible under Qt 6.12.
-
-    QFluentWidgets 1.11 paints its own chevrons and switches Qt's spin buttons off;
-    Qt 6.12 then collapses the internal editor to one pixel, so the value never
-    renders. Qt's buttons are kept for the editor geometry and collapsed to zero
-    width, which leaves the Fluent panel untouched.
-    """
-    spin.setButtonSymbols(QtWidgets.QSpinBox.ButtonSymbols.UpDownArrows)
-    spin.setStyleSheet(
-        spin.styleSheet()
-        + "\nQSpinBox::up-button, QSpinBox::down-button {"
-        " width: 0px; border: none; background: transparent; }"
-    )
 
 
 @auto_register(
@@ -158,7 +143,7 @@ class ProxyTabWidget(QtWidgets.QWidget):
         self.new_proxy_port.setRange(1, 65535)
         self.new_proxy_port.setValue(8080)
         self.new_proxy_port.setFixedWidth(110)
-        _fix_spin_box_editor(self.new_proxy_port)
+        fix_spin_box_editor(self.new_proxy_port)
         add_layout.addWidget(
             BodyLabel(translate("dialog.settings.proxy.port_label"), self.add_proxy_group),
             1, 2,

@@ -6,6 +6,23 @@ from .animations import UIAnimator
 
 logger = logging.getLogger('CORE_UI.base_widgets')
 
+
+def fix_spin_box_editor(spin: QtWidgets.QAbstractSpinBox) -> None:
+    """Keep the Fluent SpinBox value visible under Qt 6.12.
+
+    QFluentWidgets paints its own chevrons and switches Qt's spin buttons off;
+    Qt 6.12 then collapses the internal editor to one pixel. Qt's buttons are
+    restored for the editor geometry and collapsed to zero width, so the Fluent
+    panel stays untouched.
+    """
+    spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+    spin.setStyleSheet(
+        spin.styleSheet()
+        + "\nQSpinBox::up-button, QSpinBox::down-button, "
+        "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
+        " width: 0px; border: none; background: transparent; }"
+    )
+
 class ShakeLineEdit(LineEdit):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

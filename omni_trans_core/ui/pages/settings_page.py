@@ -12,6 +12,8 @@ from qfluentwidgets import (
     TitleLabel,
 )
 
+from ..base_widgets import fix_spin_box_editor
+
 
 class SettingsPage(QWidget):
     language_changed = Signal(str)
@@ -136,6 +138,7 @@ class SettingsPage(QWidget):
             group,
         )
         self.auto_save_spin = SpinBox(self.auto_save_card)
+        fix_spin_box_editor(self.auto_save_spin)
         self.auto_save_spin.setRange(0, 300)
         self.auto_save_spin.setSuffix(" s")
         self.auto_save_spin.setValue(
@@ -155,6 +158,7 @@ class SettingsPage(QWidget):
             group,
         )
         self.api_workers_spin = SpinBox(self.api_workers_card)
+        fix_spin_box_editor(self.api_workers_spin)
         max_threads = max(1, QThreadPool.globalInstance().maxThreadCount())
         self.api_workers_spin.setRange(1, max_threads)
         ratio = float(self.settings_data.get("api_thread_pool_ratio", 0.75))
