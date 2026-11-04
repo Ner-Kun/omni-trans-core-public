@@ -25,6 +25,23 @@ PROXY_PROTOCOLS = ("HTTP", "HTTPS", "SOCKS5")
 PROXY_TABLE_COLUMNS = 5
 
 
+def _fix_spin_box_editor(spin: SpinBox) -> None:
+    """Keep the Fluent SpinBox value visible under Qt 6.12.
+
+    QFluentWidgets 1.11 paints its own chevrons and switches Qt's spin buttons off;
+    Qt 6.12 then collapses the internal editor to one pixel, so the value never
+    renders. Qt's buttons are kept for the editor geometry and collapsed to zero
+    width, which leaves the Fluent panel untouched.
+    """
+    spin.setButtonSymbols(QtWidgets.QSpinBox.ButtonSymbols.UpDownArrows)
+    spin.setStyleSheet(
+        spin.styleSheet()
+        + "\nQSpinBox::up-button, QSpinBox::down-button {"
+        " width: 0px; border: none; background: transparent; }"
+    )
+
+
+
 @auto_register(
     # Enable proxy switch
     ("proxy_enabled_check", "text", "dialog.settings.proxy.enabled_check"),
@@ -141,7 +158,8 @@ class ProxyTabWidget(QtWidgets.QWidget):
         self.new_proxy_port = SpinBox(self.add_proxy_group)
         self.new_proxy_port.setRange(1, 65535)
         self.new_proxy_port.setValue(8080)
-        self.new_proxy_port.setFixedWidth(100)
+        self.new_proxy_port.setFixedWidth(110)
+        _fix_spin_box_editor(self.new_proxy_port)
         add_layout.addWidget(
             BodyLabel(translate("dialog.settings.proxy.port_label"), self.add_proxy_group),
             1, 2,
@@ -168,6 +186,8 @@ class ProxyTabWidget(QtWidgets.QWidget):
         add_layout.addWidget(self.proxy_auth_label, 3, 0)
 
         self.proxy_auth_check = SwitchButton(self.add_proxy_group)
+        self.proxy_auth_check.setOnText("")
+        self.proxy_auth_check.setOffText("")
         add_layout.addWidget(self.proxy_auth_check, 3, 1)
 
         credentials = QtWidgets.QWidget(self.add_proxy_group)
