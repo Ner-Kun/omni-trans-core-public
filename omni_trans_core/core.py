@@ -172,6 +172,8 @@ class CoreApp(MSFluentWindow):
         app = QtWidgets.QApplication.instance()
         if app:
             apply_theme(app, dev_mode=settings.DEV_MODE_ENABLED)
+        # Page switches are instant: animating heavy pages stutters.
+        self.stackedWidget.setAnimationEnabled(False)
         self.logger_manager = LoggerManager(settings.current_settings)
         self.logger_manager.configure_logging()
         self.app_name = app_name
@@ -731,7 +733,7 @@ class CoreApp(MSFluentWindow):
         self.app_menu.addAction(self.exit_action)
 
         self.menu_button = TransparentToolButton(FluentIcon.MENU, self)
-        self.menu_button.setMenu(self.app_menu)
+        self.menu_button.clicked.connect(self._show_app_menu)
         self._add_title_bar_widget(self.menu_button)
         self.file_menu = self.app_menu
         self.view_menu = self.app_menu
@@ -742,6 +744,12 @@ class CoreApp(MSFluentWindow):
     ) -> None:
         """Insert an application action into the File menu."""
         self.file_menu.insertAction(before or self.settings_action, action)
+
+    def _show_app_menu(self) -> None:
+        pos = self.menu_button.mapToGlobal(
+            QtCore.QPoint(0, self.menu_button.height())
+        )
+        self.app_menu.exec(pos)
 
     def show_app_tab(self, tab: QtWidgets.QWidget) -> None:
         """Switch to a page without exposing the navigation widgets."""

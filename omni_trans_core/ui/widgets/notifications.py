@@ -1,16 +1,16 @@
 import logging
-from typing import Callable, Optional
+from typing import Optional
 
 from PySide6 import QtCore, QtWidgets
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
-    ComboBox,
-    Dialog,
     FluentIcon,
-    ListWidget,
-    MessageBox,
+    Flyout,
+    FlyoutAnimationType,
+    FlyoutViewBase,
     PushButton,
+    StrongBodyLabel,
     TransparentToolButton,
 )
 
@@ -25,13 +25,22 @@ from ...notification_manager import (
 
 logger = logging.getLogger("CORE_UI.widgets")
 
-FILTER_KEYS = (
-    "notification.center.filter_all",
-    "notification.center.filter_info",
-    "notification.center.filter_success",
-    "notification.center.filter_warning",
-    "notification.center.filter_error",
-)
+PANEL_WIDTH = 400
+MESSAGE_WIDTH = 286
+MAX_LIST_HEIGHT = 380
+
+SCROLL_AREA_STYLE = """
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+QScrollBar:vertical { width: 8px; background: transparent; }
+QScrollBar::handle:vertical {
+    background: rgba(255, 255, 255, 40);
+    border-radius: 4px;
+    min-height: 24px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+"""
 
 
 @auto_register(
@@ -45,7 +54,7 @@ class NotificationBell(TransparentToolButton):
         self.manager = manager
         self.setIcon(FluentIcon.RINGER)
         self.setFixedSize(36, 32)
-        self._notification_center: Optional["NotificationCenter"] = None
+        self._flyout: Optional[Flyout] = None
         self._click_count = 0
         self._click_timer = QtCore.QTimer(self)
         self._click_timer.setSingleShot(True)
@@ -85,13 +94,24 @@ class NotificationBell(TransparentToolButton):
                 self._show_test_notification()
                 return
 
-        if self._notification_center is None:
-            self._notification_center = NotificationCenter(
-                self.manager, self.window()
-            )
-        self._notification_center.show()
-        self._notification_center.raise_()
-        self._notification_center.activateWindow()
+        if self._flyout is not None:
+            self._flyout.close()
+            self._flyout = None
+            return
+
+        self.manager.mark_all_as_read()
+        self.bell_clicked.emit()
+        view = NotificationCenterView(self.manager, self.window())
+        self._flyout = Flyout.make(
+            view,
+            self,
+            self.window(),
+            aniType=FlyoutAnimationType.DROP_DOWN,
+        )
+        self._flyout.closed.connect(self._on_flyout_closed)
+
+    def _on_flyout_closed(self):
+        self._flyout = None
 
     def _reset_click_count(self):
         self._click_count = 0
@@ -131,111 +151,124 @@ class NotificationBell(TransparentToolButton):
         self._update_badge_position()
 
 
-@auto_register(
-    ("", "windowTitle", "notification.center.title"),
-    ("clear_all_btn", "text", "notification.center.clear_all"),
-    ("no_notifications_label", "text", "notification.center.no_notifications"),
-)
-class NotificationCenter(Dialog):
+class NotificationCenterView(FlyoutViewBase):
+    """Notification history shown in a flyout anchored to the bell."""
+
     def __init__(self, manager: "NotificationManager", parent=None):
+        super().__init__(parent)
         self.manager = manager
-        super().__init__("Notifications", "", parent)
-        self.setFixedSize(460, 560)
-        self.contentLabel.hide()
-        self.buttonGroup.hide()
-        self._build_ui()
-        self._connect_signals()
-        self._populate_list()
-        self._update_empty_state()
+        self.setFixedWidth(PANEL_WIDTH)
 
-    def _build_ui(self):
-        self.filter_combo = ComboBox(self)
-        self._refresh_filter_items()
-        self.vBoxLayout.insertWidget(1, self.filter_combo)
+        self.vBoxLayout = QtWidgets.QVBoxLayout(self)
+        self.vBoxLayout.setContentsMargins(16, 12, 16, 12)
+        self.vBoxLayout.setSpacing(8)
+        self.vBoxLayout.addLayout(self._build_header())
+        self._build_list()
 
-        self.notifications_list = ListWidget(self)
-        self.vBoxLayout.insertWidget(2, self.notifications_list, 1)
+        self.manager.notification_added.connect(self._on_history_changed)
+        self.manager.notification_removed.connect(self._on_history_changed)
+        self.manager.history_cleared.connect(self._on_history_changed)
+        loc_man.language_changed.connect(self.retranslate)
 
-        self.no_notifications_label = BodyLabel(self)
+        self._populate()
+
+    def _build_header(self) -> QtWidgets.QHBoxLayout:
+        header = QtWidgets.QHBoxLayout()
+        header.setSpacing(8)
+
+        self.title_label = StrongBodyLabel(
+            translate("notification.center.title"), self
+        )
+        header.addWidget(self.title_label)
+        header.addStretch(1)
+
+        self.clear_all_btn = PushButton(
+            translate("notification.center.clear_all"), self
+        )
+        self.clear_all_btn.clicked.connect(self.manager.clear_history)
+        header.addWidget(self.clear_all_btn)
+        return header
+
+    def _build_list(self) -> None:
+        self.scroll_area = QtWidgets.QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_area.setStyleSheet(SCROLL_AREA_STYLE)
+
+        self.items_container = QtWidgets.QWidget(self.scroll_area)
+        self.items_layout = QtWidgets.QVBoxLayout(self.items_container)
+        self.items_layout.setContentsMargins(0, 0, 0, 0)
+        self.items_layout.setSpacing(2)
+        self.scroll_area.setWidget(self.items_container)
+        self.vBoxLayout.addWidget(self.scroll_area, 1)
+
+        self.no_notifications_label = BodyLabel(
+            translate("notification.center.no_notifications"), self
+        )
         self.no_notifications_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignCenter
         )
-        self.vBoxLayout.insertWidget(3, self.no_notifications_label)
+        self.vBoxLayout.addWidget(self.no_notifications_label)
 
-        self.clear_all_btn = PushButton(self)
-        self.vBoxLayout.insertWidget(4, self.clear_all_btn)
+    def _populate(self) -> None:
+        while self.items_layout.count():
+            item = self.items_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
 
-    def _refresh_filter_items(self):
-        current = self.filter_combo.currentIndex()
-        self.filter_combo.blockSignals(True)
-        self.filter_combo.clear()
-        for key in FILTER_KEYS:
-            self.filter_combo.addItem(translate(key))
-        if 0 <= current < self.filter_combo.count():
-            self.filter_combo.setCurrentIndex(current)
-        self.filter_combo.blockSignals(False)
+        history = self.manager.get_history()
+        for notification in history:
+            self.items_layout.addWidget(self._create_item(notification))
+        self.items_layout.addStretch(1)
 
-    def _connect_signals(self):
-        self.filter_combo.currentIndexChanged.connect(self._on_filter_changed)
-        self.clear_all_btn.clicked.connect(self._on_clear_all)
-        self.manager.notification_added.connect(self._on_notification_added)
-        self.manager.notification_removed.connect(self._on_notification_removed)
-        self.manager.history_cleared.connect(self._on_history_cleared)
-        loc_man.language_changed.connect(self._refresh_filter_items)
+        has_items = bool(history)
+        self.no_notifications_label.setVisible(not has_items)
+        self.scroll_area.setVisible(has_items)
+        if has_items:
+            height = min(
+                MAX_LIST_HEIGHT, self.items_container.sizeHint().height() + 4
+            )
+            self.scroll_area.setFixedHeight(max(80, height))
+        self.adjustSize()
 
-    def _populate_list(self):
-        self.notifications_list.clear()
-        filter_type = self._get_current_filter()
-        for notif in self.manager.get_history():
-            if filter_type and notif.type != filter_type:
-                continue
-            self._add_notification_item(notif)
-        self._update_empty_state()
+    def _create_item(self, notification: NotificationItem) -> QtWidgets.QWidget:
+        style = NOTIFICATION_STYLES.get(notification.type, {})
+        icon = style.get("icon", "ℹ️")
 
-    def _get_current_filter(self) -> Optional[NotificationType]:
-        index = self.filter_combo.currentIndex()
-        types = [
-            None,
-            NotificationType.INFO,
-            NotificationType.SUCCESS,
-            NotificationType.WARNING,
-            NotificationType.ERROR,
-        ]
-        return types[index] if 0 <= index < len(types) else None
+        row = QtWidgets.QWidget(self.items_container)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(8)
 
-    def _add_notification_item(self, notif: NotificationItem):
-        style_config = NOTIFICATION_STYLES.get(notif.type, {})
-        icon = style_config.get("icon", "ℹ️")
-        time_ago = self._format_time_ago(notif.timestamp)
+        icon_label = BodyLabel(icon, row)
+        icon_label.setFixedWidth(20)
+        layout.addWidget(icon_label, 0, QtCore.Qt.AlignmentFlag.AlignTop)
 
-        item_widget = QtWidgets.QWidget()
-        item_layout = QtWidgets.QVBoxLayout(item_widget)
-        item_layout.setContentsMargins(8, 6, 8, 6)
-        item_layout.setSpacing(4)
+        text_column = QtWidgets.QVBoxLayout()
+        text_column.setSpacing(0)
+        message = BodyLabel(notification.text, row)
+        message.setWordWrap(True)
+        message.setFixedWidth(MESSAGE_WIDTH)
+        text_column.addWidget(message)
 
-        top_layout = QtWidgets.QHBoxLayout()
-        icon_label = BodyLabel(icon, item_widget)
-        top_layout.addWidget(icon_label)
-        text_label = BodyLabel(notif.text, item_widget)
-        text_label.setWordWrap(True)
-        top_layout.addWidget(text_label, stretch=1)
-        item_layout.addLayout(top_layout)
-
-        bottom_layout = QtWidgets.QHBoxLayout()
-        bottom_layout.setContentsMargins(24, 0, 0, 0)
-        bottom_layout.addWidget(CaptionLabel(time_ago, item_widget))
-        bottom_layout.addStretch()
-        delete_btn = TransparentToolButton(FluentIcon.DELETE, item_widget)
-        delete_btn.clicked.connect(
-            lambda _=False, nid=notif.id: self._on_delete_notification(nid)
+        time_ago = CaptionLabel(
+            self._format_time_ago(notification.timestamp), row
         )
-        bottom_layout.addWidget(delete_btn)
-        item_layout.addLayout(bottom_layout)
+        text_column.addWidget(time_ago)
+        layout.addLayout(text_column, 1)
 
-        list_item = QtWidgets.QListWidgetItem(self.notifications_list)
-        list_item.setSizeHint(item_widget.sizeHint())
-        self.notifications_list.addItem(list_item)
-        self.notifications_list.setItemWidget(list_item, item_widget)
+        delete_btn = TransparentToolButton(FluentIcon.DELETE, row)
+        delete_btn.setFixedSize(28, 28)
+        delete_btn.clicked.connect(
+            lambda _=False, nid=notification.id: self.manager.remove_notification(nid)
+        )
+        layout.addWidget(delete_btn, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        return row
 
     def _format_time_ago(self, timestamp: float) -> str:
         now = QtCore.QDateTime.currentSecsSinceEpoch()
@@ -248,39 +281,13 @@ class NotificationCenter(Dialog):
             return translate("notification.center.time_hours", hours=diff // 3600)
         return translate("notification.center.time_days", days=diff // 86400)
 
-    def _update_empty_state(self):
-        has_items = self.notifications_list.count() > 0
-        self.no_notifications_label.setVisible(not has_items)
-        self.notifications_list.setVisible(has_items)
+    def _on_history_changed(self, *_args) -> None:
+        self._populate()
 
-    def _on_filter_changed(self, _index: int):
-        self._populate_list()
-
-    def _on_clear_all(self):
-        box = MessageBox(
-            translate("notification.center.clear_all_confirm_title"),
-            translate("notification.center.clear_all_confirm_text"),
-            self,
+    def retranslate(self) -> None:
+        self.title_label.setText(translate("notification.center.title"))
+        self.clear_all_btn.setText(translate("notification.center.clear_all"))
+        self.no_notifications_label.setText(
+            translate("notification.center.no_notifications")
         )
-        box.yesButton.setText(translate("notification.center.clear_all"))
-        box.cancelButton.setText("Cancel")
-        if box.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            self.manager.clear_history()
-
-    def _on_delete_notification(self, notification_id: str):
-        self.manager.remove_notification(notification_id)
-        self._populate_list()
-
-    def _on_notification_added(self, _notification: NotificationItem):
-        self._populate_list()
-
-    def _on_notification_removed(self, _notification_id: str):
-        self._populate_list()
-
-    def _on_history_cleared(self):
-        self._populate_list()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.manager.mark_all_as_read()
-        self._populate_list()
+        self._populate()

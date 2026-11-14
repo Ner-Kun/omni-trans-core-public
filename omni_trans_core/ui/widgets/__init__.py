@@ -32,7 +32,7 @@ from .generation_params import (
 )
 from .languages import SourceLanguageWidget, TargetLanguageWidget
 from .multi_connection import MultiConnectionTable
-from .notifications import NotificationBell, NotificationCenter
+from .notifications import NotificationBell, NotificationCenterView
 from .rpm_status import RPMStatusWidget
 from .translation_control import (
     EDIT_DEBOUNCE_INTERVAL_MS,
@@ -62,7 +62,7 @@ __all__ = [
     "MAX_TOKENS_SPINBOX_STEP",
     "MultiConnectionTable",
     "NotificationBell",
-    "NotificationCenter",
+    "NotificationCenterView",
     "PENALTY_SLIDER_RANGE",
     "PENALTY_SPINBOX_RANGE",
     "PRECISION_SPINBOX_STEP",
